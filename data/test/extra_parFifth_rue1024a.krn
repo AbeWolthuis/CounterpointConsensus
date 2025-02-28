@@ -1,0 +1,87 @@
+!!!!SEGMENT: Rue/Rue1024a-Missa_Pro_fidelibus_defunctis-Introit.krn
+!!!COM: la Rue, Pierre de
+!!!CDT: ~1452///-1518/11/20
+!!!OPR: Missa Pro fidelibus defunctis
+!!!ONM: 1
+!!!OTL: Introit
+!!!AGN: Mass; Introit
+!!!SCT: Rue1024a
+!!!SCA: Rue1024a
+!!!jrpid: Rue1024a
+!!!voices-OPR: 4
+!!!voices: 4
+**kern	**kern	**kern	**kern
+*Ivox	*Ivox	*Ivox	*Ivox
+*I"Bassus	*I"Tenor	*I"Contra	*I"Discantus
+*I'B	*I'T	*I'C	*I'D
+*staff4	*staff3	*staff2	*staff1
+*>[A,B,A]	*>[A,B,A]	*>[A,B,A]	*>[A,B,A]
+*>A	*>A	*>A	*>A
+*clefF4	*clefF4	*clefF4	*clefGv2
+*k[b-e-]	*k[b-e-]	*k[b-e-]	*k[b-e-]
+*M2/1	*M2/1	*M2/1	*M2/1
+*met(C|)	*met(C|)	*met(C|)	*met(C|)
+!!section: Eternam dona eis
+!!!OMD: Eternam dona eis
+=1-	=1-	=1-	=1-
+0r	1r	0F	0r
+.	[1BB-	.	.
+=2	=2	=2	=2
+0r	1BB-]	1G	0r
+.	1C	[1A	.
+=3	=3	=3	=3
+1r	1.D	2A\]	0r
+.	.	2F\	.
+[1BB-	.	[1F	.
+.	2BB-/	.	.
+=4	=4	=4	=4
+2BB-/]	0BB-	1F]	0r
+2GG/	.	.	.
+1GG	.	[1B-	.
+=5	=5	=5	=5
+2FF	2C	2B-\]	0c
+2GG	2D	2A\	.
+1FF	1C	1A	.
+=6	=6	=6	=6
+1r	0BB-	0B-	1d
+[1BB-	.	.	1d
+=7	=7	=7	=7
+1BB-]	1r	1r	1d
+[1BB-	1D	[1B-	[1f
+=8	=8	=8	=8
+1BB-]	1D	1B-]	2f\]
+.	.	.	2e-\
+1BB-	[1F	1B-	1d
+=9	=9	=9	=9
+1FF	2F\]	1A	2d\
+.	2E-\	.	1c
+1GG	1D	[1G	.
+.	.	.	2B-\
+=10	=10	=10	=10
+2CC/	1.C	2G\]	2c\
+1FF	.	1F	1A
+2GG/	2BB-/	2D\	[2G/
+=11	=11	=11	=11
+1AA	1C	1C	2G/]
+.	.	.	2F#i/
+1GG	1D	1BB-	1G
+=12	=12	=12	=12
+1r	1.E-	1C	1r
+[1GG	.	[1BB-	[1G
+.	[2D\	.	.
+=13	=13	=13	=13
+1GG]	2D\]	2BB-/]	1G]
+.	1C	2C/	.
+1GG	.	1D	1G
+.	2BB-/	.	.
+=14	=14	=14	=14
+0CC	0C	0E-	0G
+*-	*-	*-	*-
+!!!RDF**kern: l=long note in original notation
+!!!RDF**kern: i=editorial accidental
+!!!ENC: Chris Gage 04-23-2013
+!!!END: 2013/08/01/
+!!!EED: Jesse Rodin
+!!!EEV: 2013/08/02/
+!!!ONB: Translated from MusicXML and edited on 2013/08/02/ by Craig Sapp
+!!muse2ps: T^@{OPR}^u^@{ONM}{. }@{OTL}^C^@{COM}^i2I150v85,85,85,150Q16
