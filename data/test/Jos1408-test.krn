@@ -1,0 +1,82 @@
+!!!!SEGMENT: Jos/Jos1408-Miserimini_mei.krn
+!!!COA: Josquin des Prez
+!!!CDT: ~1450-1521/08/27
+!!!COA2: Richafort
+!!!COA3: Mouton
+!!!OTL: Miserimini mei
+!!!AGN: Motet
+!!!SCT: NJE 14.8
+!!!SCA: New Josquin Edition 14.8
+!!!jrpid: Jos1408
+!!!voices: 4
+**kern	**kern	**kern	**kern
+*staff4	*staff3	*staff2	*staff1
+*Ivox	*Ivox	*Ivox	*Ivox
+*I"Bassus	*I"Tenor	*I"Altus	*I"Superius
+*I'B	*I'T	*I'A	*I'S
+*clefF4	*clefGv2	*clefGv2	*clefG2
+*>[A,B]	*>[A,B]	*>[A,B]	*>[A,B]
+*>A	*>A	*>A	*>A
+*k[]	*k[]	*k[]	*k[]
+*M2/1	*M2/1	*M2/1	*M2/1
+*met(C|)	*met(C|)	*met(C|)	*met(C|)
+=1-	=1-	=1-	=1-
+0r	0r	0r	1.e
+.	.	.	2e/
+=2	=2	=2	=2
+0r	0r	0r	1g
+.	.	.	1g
+=3	=3	=3	=3
+0r	0r	1.A	1a
+.	.	.	1a
+.	.	2A/	.
+=4	=4	=4	=4
+0r	0r	1c	2g/
+.	.	.	4c/
+.	.	.	4d/
+.	.	1c	4e/
+.	.	.	4f/
+.	.	.	4g/
+.	.	.	4a/
+=5	=5	=5	=5
+0r	0r	1d	2b\
+.	.	.	2.cc\
+.	.	1d	.
+.	.	.	8b/L
+.	.	.	8a/J
+.	.	.	2b\
+=6	=6	=6	=6
+0r	1.A	2c\	1cc
+.	.	4F/	.
+.	.	4G/	.
+.	.	4A/	2r
+.	.	4B\	.
+.	2A/	4c\	[2cc\
+.	.	4d\	.
+=7	=7	=7	=7
+0r	1c	2e\	2cc\]
+.	.	2.f\	4b\
+.	.	.	4a/
+.	1c	.	1g
+.	.	8e\L	.
+.	.	8d\J	.
+.	.	2e\	.
+=8	=8	=8	=8
+0r	1d	1f	2f/
+.	.	.	1a
+.	1d	2F/	.
+.	.	2G/	4g/
+.	.	.	4f/
+==	==	==	==
+*-	*-	*-	*-
+!!!RDF**kern: l=long note in original notation
+!!!RDF**kern: i=editorial accidental
+!!!RDF**kern: V=start of tuplet marker
+!!!RDF**kern: Z=end of tuplet marker
+!!!ENC: Joel Chapman 2012/1/21
+!!!END: 2012/01/21/
+!!!EED: Jesse Rodin
+!!!EEV: 2012/02/02/
+!!attribution-level@Jos: 4a (the rest [double question mark])
+!!!ONB: Translated from MusicXML and edited on 2012/02/02/ by Craig Sapp
+!!muse2ps: C^@{COA}?^i2I150v95,95,95,150Q16z18
