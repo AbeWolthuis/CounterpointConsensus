@@ -1,6 +1,6 @@
 from typing import Dict, Tuple, Union
 
-from constants import duration_map, pitch_to_midi, midi_to_pitch
+from constants import DURATION_MAP, PITCH_TO_MIDI, MIDI_TO_PITCH
 
 
 class SalamiSlice:
@@ -57,8 +57,8 @@ class SalamiSlice:
 
 class Note():
     _POSSIBLE_TYPES = ('note', 'rest', 'period', 'barline', 'final_barline')
-    midi_to_pitch = midi_to_pitch
-    pitch_to_midi = pitch_to_midi
+    midi_to_pitch = MIDI_TO_PITCH
+    pitch_to_midi = PITCH_TO_MIDI
     # __slots__ = ('midi_pitch', 'duration', 'note_type', 'new_occurrence')
 
     def __init__(self, 

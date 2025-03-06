@@ -4,7 +4,7 @@ from typing import Dict, Tuple, List, Union
 
 from Note import Note, SalamiSlice
 
-from constants import duration_map, pitch_to_midi, midi_to_pitch
+from constants import DURATION_MAP, PITCH_TO_MIDI, MIDI_TO_PITCH
 
 DEBUG = True
 

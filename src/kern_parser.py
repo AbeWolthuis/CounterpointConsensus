@@ -7,7 +7,7 @@ from typing import List, Dict, Tuple
 import copy
 import pandas as pd
 
-from constants import duration_map, pitch_to_midi, midi_to_pitch
+from constants import DURATION_MAP, PITCH_TO_MIDI, MIDI_TO_PITCH
 from counterpoint_rules import RuleViolation
 from data_preparation import violations_to_df
 
@@ -28,8 +28,8 @@ DEBUG = True
 
 metadata_template = {
     # JRP sepcified metadata
-    'COM': '',
-    'CDT': '',
+    'COM': '', # composer 
+    'CDT': '', # Copmoser's dates record
     'jrpid': '', # josquin research project ID
     'attribution-level@Jos': '',
     'SEGMENT': '', # filename
@@ -37,7 +37,10 @@ metadata_template = {
     'voices': [], # TODO list with number of voices for each score-movement 
     'voice_names': [], # list of lists with voice names for each score-movement 
     'key_signatures': [], # list of key signatures for each score-movement
-
+    
+    # Add time signatures to metadata template
+    'time_signatures': [], # list of time signatures for each voice at each change point
+    
     # Metadata we add ourselves
     'section_ends': [], # list of the barnumbers of the last bars of each section
 }
@@ -75,7 +78,6 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
     
     with open(kern_filepath, 'r') as f:
         metadata_flag = True
-        # single_voices_indication_flag = True
         bar_count = 0 
         last_metadata_update_bar = 0
 
@@ -83,7 +85,7 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
         lines = f.readlines()
 
         # Parse metadata, and gather the section of the file containing notes
-        for line in lines:
+        for line_idx, line in enumerate(lines):
             # if DEBUG: print(line[0:6]) 
             if line.startswith('!'):
                 if line[0:6] in metadata_linestarts_map.keys():
@@ -104,76 +106,51 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                         continue
                     elif line[2] == '"': # " represents long voice names
                         voice_names = [voice_name.replace('*I"', '') for voice_name in line.split()]
-                        barline_tuple = (last_metadata_update_bar, bar_count)
+                        barline_tuple = (last_metadata_update_bar, -1)
                         metadata['voice_names'].append((barline_tuple, voice_names))
                     else:
                         raise NotImplementedError("Something in parsing voices (*I) not yet implemented.")
                 elif line.startswith('*k'):
-                    # Check that keysigs are equal
-                    keysig_tokens = line.split('\t')
-                    if len(set(keysig_tokens)) != 1: 
-                        raise ValueError("Different key signatures in voices not yet implemented.")
+                    # Parse key signatures for all voices
+                    metadata_dict = parse_keysig(line, metadata, bar_count, line_idx)
+                    if DEBUG: print(f"Found key signatures at bar {bar_count}: {metadata_dict['key_signatures'][-1][1]}")
+                        
+                elif '*M' in line:
+                    # Check if any token starts with *M but not *MM (more robust - checks for *M anywhere in line)
+                    tokens = line.strip().split('\t')
+                    has_timesig = any(token.startswith('*M') and not token.startswith('*MM') for token in tokens)
                     
-                    # Parse the key signature
-                    keysig_token = keysig_tokens[3:] # Remove *k[ from the start
-                    key_signature = {k:v for k,v in key_signature_template.items()}
-                    i = 0 
-                    while i < len(keysig_token):
-                        c = keysig_token[i]
-                        if c == ']':
-                            break
-                        elif c in key_signature_template.keys():
-                            if keysig_token[i+1] == '+':
-                                key_signature_template[c] += 1
-                            elif keysig_token[i+1] == '-':
-                                key_signature_template[c] -= 1
-                            i += 1
-                        elif c  in ['+', '-']:
-                            raise ValueError(f"Could not parse key signature '{keysig_token}', reached accidental '{c}' unpredictedly.")                     
-                        else:
-                            raise ValueError(f"Could not parse key signature '{keysig_token}'")                     
-                        i += 1
-                        #endwhile
-
-                    # Set keysig
-                    metadata['key_signatures'].append(key_signature)
-                elif line.startswith('*M'):
-                    raise NotImplementedError("Time signatures not yet implemented.")
+                    if has_timesig:
+                        # Parse time signatures for all voices
+                        metadata_dict = parse_timesig(line, metadata, bar_count)
+                        if DEBUG: print(f"Found time signatures at bar {bar_count}: {metadata_dict['time_signatures'][-1][1]}")
+                elif line.startswith('*MM'):
+                    # Metronome marking, present in some files, but we don't use this.
+                    continue
+                elif line.startswith('*met'):
+                    # TODO: check if we need to implement this later (mensural)
+                    continue
                 elif line.startswith(('**kern', '*staff', '*clef')):
                     continue
+                elif line.startswith('*>'):
+                    # Lines indicating structure, or the begin of the structure.
+                    continue
                 else:
-                    raise NotImplementedError("Some metadata starting with * not yet implemented.")
+                    raise NotImplementedError(f"Some metadata starting with * not yet implemented. Line {line_idx}: {line}")
             
             elif line.startswith('='):
+                # Update bars according to the barnumber found. Note, this might reset the barnumbers, depending on how they are encoded/
                 try:
-                    a = int(line[1])
-                    bar_count += 1
+                    bar_num = int(''.join(filter(str.isdigit, line)))
+                    if bar_num < bar_count:
+                        raise ValueError(f"Bar number {bar_num} is lower than the previous bar number {bar_count}") 
+                    bar_count = bar_num
                 except AttributeError as ae:
                     raise ae
-            
-            _ = _
-            ''' # old attempt
-            if metadata_flag:
-                if line[0:6] in metadata_linestarts_map.keys():
-                    # Splt '!!!jrpid: xxx' to 'jrpid',' xxx'
-                    a = line.split(':')[0][0:6]
-                    metadata_key, metadata_value = metadata_linestarts_map[a], line.split(':')[1].strip()
-                    metadata[metadata_key] = metadata_value
-                elif line.startswith('*I"'):
-                    # Add voice names, in given order
-                    metadata['voice_names'] = [voice_name.replace('*I"', '') for voice_name in line.split()]
-                elif line.startswith('='):
-                    metadata_flag = False
-                
-                # End of file meta-data handling:
-            else:
-                if line.startswith('*-'):
-                    # Final barline has been reached, end of file can still contain some metadata
-                    # We don't add this line (TODO: should we for parsing consistency?)
-                    metadata_flag = True
-                else:
-                    note_section.append(line)
-'''
+
+                            
+            else: 
+                note_section.append(line)
 
     # Post-process the meta-data
     metadata['voices'] = int(metadata['voices'])
@@ -235,9 +212,9 @@ def kern_token_to_note(
         try:
             c = kern_token[i]
 
-            if c in duration_map:
-                new_note.duration = duration_map[c]
-            elif c in pitch_to_midi:
+            if c in DURATION_MAP:
+                new_note.duration = DURATION_MAP[c]
+            elif c in PITCH_TO_MIDI:
                 ''' First, set the note without regarding accidentals. '''
                 pitch_token = c
                 new_note.note_type = 'note'
@@ -250,7 +227,7 @@ def kern_token_to_note(
                     pitch_token += c
                     pitch_token_len += 1
 
-                new_note.midi_pitch = pitch_to_midi[pitch_token]
+                new_note.midi_pitch = PITCH_TO_MIDI[pitch_token]
 
                 ''' Check for new accidentals after the pitch. '''
                 accidental_token = 0
@@ -325,7 +302,91 @@ def kern_token_to_note(
 
     # TODO: return the accidental tracker, because it is relevant for the entire measure
     return new_note, accidental_tracker
+
+
+"""Helper functions to parse all the different kinds of lines."""
+
+def parse_timesig(line: str, metadata: dict, bar_count: int) -> dict:
+    """ Parse a time signature token and update the metadata dict """
+        
+    time_sig_tokens = line.strip().split('\t')
+    time_signatures = []
     
+    for token in time_sig_tokens: 
+        if token.startswith('*M'):
+            time_sig = token[2:]  # Remove '*M' prefix to get e.g. "2/1"
+            if '/' in time_sig:
+                numerator, denominator = map(int, time_sig.split('/'))
+                time_signatures.append((numerator, denominator))
+            elif '*' in time_sig:
+                time_signatures.append('*')
+            else:
+                # Handle cases where only numerator is specified
+                time_signatures.append((int(time_sig), 1))
+
+    # Replace '*' with the previous time signature
+    for i, time_sig in enumerate(time_signatures):
+        if time_sig == '*':
+            time_signatures[i] = time_signatures[i-1]
+            
+    # Record the bar number of this change
+    last_metadata_update_bar = bar_count
+    barline_tuple = (last_metadata_update_bar, -1)
+    
+    # If this is not the first time signature encountered, set the ending of the previous one
+    if metadata['time_signatures']:
+        # If the new time sig is at bar 10, then the previous one will be set from (0, 9), not (0, 10). This should happen everywhere.
+        metadata['time_signatures'][-1][0] = (metadata['time_signatures'][-1][0][0], last_metadata_update_bar - 1)
+ 
+    # Store time signatures with the bar number where they changed
+    metadata['time_signatures'].append((barline_tuple, time_signatures))
+    
+    return metadata
+
+def parse_keysig(line: str, metadata: dict, bar_count: int, line_idx: int) -> dict:
+                        """ Parse a key signature token and update the metadata dict """
+
+                        # Check that all keysig tokens are identical
+                        keysig_tokens = line.strip().split('\t')
+                        if DEBUG: print(f"Keysig tokens: {' '.join(keysig_tokens)} at line {line_idx}")
+
+                        if len(set(keysig_tokens)) != 1: 
+                            raise ValueError("Different key signatures in voices not yet implemented.")
+                        
+                        # Use the first token to parse the key sig (they are indentical)
+                        keysig_token = keysig_tokens[0][3:] # Remove *k[ from the start
+                        key_signature = {k:v for k,v in key_signature_template.items()}
+                        i = 0 
+                        while i < len(keysig_token):
+                            c = keysig_token[i]
+                            if c == ']':
+                                break
+                            elif c in key_signature.keys():
+                                if keysig_token[i+1] == '+':
+                                    key_signature[c] += 1
+                                elif keysig_token[i+1] == '-':
+                                    key_signature[c] -= 1
+                                i += 1
+                            elif c  in ['+', '-']:
+                                raise ValueError(f"Could not parse key signature '{keysig_token}', reached accidental '{c}' unpredictedly.")                     
+                            else:
+                                raise ValueError(f"Could not parse char '{c}' in key signature '{keysig_token}'")                     
+                            i += 1
+                            #endwhile
+
+                        # Record the bar number of this change
+                        last_metadata_update_bar = bar_count
+                        barline_tuple = (last_metadata_update_bar, -1)
+                        
+                        # If this is not the first time signature encountered, set the ending of the previous one
+                        if metadata['key_signatures']:
+                            # If the new time sig is at bar 10, then the previous one will be set from (0, 9), not (0, 10). This should happen everywhere.
+                            metadata['key_signatures'][-1][0] = (metadata['key_signatures'][-1][0][0], last_metadata_update_bar - 1)
+
+                        # Add keysig to metadata
+                        metadata['key_signatures'].append((barline_tuple, key_signature))
+
+                        return metadata
 
 """Functions for post-processing the salami slices such that they can be analysed."""
 
@@ -422,8 +483,8 @@ def feature_counts(violations: Dict[str, List[RuleViolation]]) -> Dict[str, int]
 if __name__ == "__main__":
     # filepath = os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn")
     # filepath = os.path.join("..", "data", "test", "Jos1408-test.krn")
-    # filepath = os.path.join("..", "data", "test", "Rue1024a.krn")
-    filepath = os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")
+    filepath = os.path.join("..", "data", "test", "Rue1024a.krn")
+    # filepath = os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")
     
     salami_slices, metadata = parse_kern(filepath)
     salami_slices, metadata = post_process_salami_slices(salami_slices, metadata)

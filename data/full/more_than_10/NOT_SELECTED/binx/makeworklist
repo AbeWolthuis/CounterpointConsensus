@@ -1,0 +1,803 @@
+#!/usr/bin/perl
+#
+# Programmer:    Craig Stuart Sapp <craig.stanford.edu>
+# Creation Date: Thu Dec 26 23:22:16 PST 2019
+# Last Modified: Fri Dec 27 23:10:25 PST 2019
+# Filename:      makeworklist
+# Syntax:        perl 5
+# vim:           ts=3
+#
+# Description:   Create a JSON work index for use on the JRP website,
+#                https://josquin.stanford.edu.
+#
+# Todo:
+#	* change "notecount parameter to "nc"
+#	* change "vnotecount parameter to "vnc"
+#	* remove "ih" parameter
+#
+
+use strict;
+
+##############################
+##
+## Humdrum tools used in this script.  If they are not found, then
+## install https://github.com/humdrum-tools/humdrum-tools.
+##
+
+my $notecount = `which notecount`;
+chomp $notecount;
+if ($notecount =~ /^\s*$/) {
+	die "Error: cannot find notecount Humdrum Extras tool\n";
+}
+
+my $extractx = `which extractx`;
+chomp $extractx;
+if ($extractx =~ /^\s*$/) {
+	die "Error: cannot find extractx Humdrum Extras tool\n";
+}
+
+my $ridx = `which ridx`;
+chomp $ridx;
+if ($ridx =~ /^\s*$/) {
+	die "Error: cannot find ridx Humdrum Extras tool\n";
+}
+
+#
+# pdfinfo is part of poppler. In MacOS, install with the command:
+#    brew install poppler
+# You may also need to install Homebrew: https://brew.sh
+#
+
+my $pdfinfo = `which pdfinfo`;
+chomp $pdfinfo;
+if ($pdfinfo =~ /^\s*$/) {
+	die "Error: cannot find pdfinfo tool\n";
+}
+
+
+###########################################################################
+
+# $Basedir: The directory in which the repertory directories are located,
+# as well as the info directory.
+my $Basedir = ".";
+
+# @Replist: The list of composer directories that contain kern data
+# for digital scores.
+my @Replist = getRepertoryList($Basedir);
+
+# %Composer: A mapping of @Replist directory names to the full names
+# and dates of composers.
+my %Composer = getComposerList("$Basedir/info/composer.txt");
+
+print STDERR "Getting note counts for all repertories\n";
+# %NoteCounts: A mapping by JRPID to note counts for a work or mass section.
+my %NoteCounts = getNoteCounts($Basedir, @Replist);
+print STDERR "Done getting note counts for all repertories\n";
+
+print STDERR "Getting page counts for all repertories\n";
+# %PageCounts: A mapping by JRPID to page counts for a work or mass section.
+my %PageCounts = getPageCounts($Basedir, @Replist);
+print STDERR "Done getting page counts for all repertories\n";
+
+
+##############################
+
+# Print the JSON worklist.  The list consists of an array of entries
+# for each composer directory.  The first directory is for Anonymous
+# and then each subsequent entry is in alphabetical order by the name
+# of the directory.
+
+print "[\n";
+
+for  (my $i=0; $i<@Replist; $i++) {
+	my $commaQ = 1;
+	$commaQ = 0 if $i == $#Replist;
+	printRepertory($Basedir, $Replist[$i], $commaQ);
+	print "\n";
+}
+
+print "]\n";
+
+
+exit(0);
+
+
+###########################################################################
+
+
+##############################
+##
+## getNoteCounts -- Prepare sounding note counts for each file in the database.
+##
+
+sub getNoteCounts {
+	my ($basedir, @reps) = @_;
+	my %output;
+	foreach my $rep (@reps) {
+		my @files = sort glob("$basedir/$rep/kern/*.krn");
+		foreach my $file (@files) {
+			my $notecount = `$notecount $file | $extractx -i sound | $ridx -H`;
+			chomp $notecount;
+			my $id = $file;
+			$id =~ s/.*\///;
+			$id =~ s/-.*//;
+			$id =~ s/.krn$//;
+			if ($output{$id} !~ /^\s*$/) {
+				die "Error: $id occurs more than once, such as $file\n";
+			}
+			$output{$id} = $notecount;
+		}
+	}
+	return %output;
+}
+
+
+
+##############################
+##
+## getPageCounts -- Prepare page counts for each PDF file in the database.
+##
+
+sub getPageCounts {
+	my ($basedir, @reps) = @_;
+	my %output;
+	my $pagecount;
+	foreach my $rep (@reps) {
+		my @files = sort glob("$basedir/$rep/kern/*.krn");
+		foreach my $file (@files) {
+			my $id = $file;
+			$id =~ s/.*\///;
+			$id =~ s/-.*//;
+			$id =~ s/.krn$//;
+			my $pdffile = $file;
+			$pdffile =~ s/\/kern\//\/pdf\//;
+			$pdffile =~ s/\.krn$/.pdf/;
+			if (!-r $pdffile) {
+				print STDERR "Warning: missing PDF file $pdffile\n";
+				$output{$id} = 0;
+				next;
+			}
+			my $pinfo = `$pdfinfo $pdffile | grep "^Pages:"`;
+			chomp $pinfo;
+			if ($pinfo =~ /^Pages:\s*(\d+)\s*$/) {
+				$pagecount = $1;
+				if ($pagecount == 0) {
+					print STDERR "Warning: No pages in PDF file $pdffile\n";
+				}
+			} else {
+				print STDERR "Warning: Problem with PDF file $pdffile\n";
+				$pagecount = 0;
+			}
+			chomp $pagecount;
+			if ($output{$id} !~ /^\s*$/) {
+				die "Error: $id occurs more than once, such as $file\n";
+			}
+			$output{$id} = $pagecount;
+		}
+	}
+	return %output;
+}
+
+
+
+##############################
+##
+## getVoiceNoteCounts -- return a list of the note counts by kern spine.  Input
+##    is the filename and the exclusive interpretation line from the file.
+##
+
+sub getVoiceNoteCounts {
+	my ($file, $eline) = @_;
+	my @output;
+	my @edata = split(/\t+/, $eline);
+	my $counter = 0;
+	for (my $i=0; $i<@edata; $i++) {
+		my $text = $edata[$i];
+		next if $text ne "**kern";
+		$counter++;
+		my $command = "cat $file | $extractx -k $counter | $notecount | $extractx -i sound | $ridx -H";
+		my $notecount = `$command`;
+		chomp $notecount;
+		$notecount = 0 if $notecount =~ /^\s*$/;
+		$output[@output] = $notecount;
+	}
+	return @output;
+}
+
+
+
+##############################
+##
+## getRepertoryList --  Look for directories in the base directory that have the form:
+##        [A-Z][a-z][a-z]/kern
+##     Ignore Zma (masses), Zmo (motets), Zso (songs), Joa (secure Josquin),
+##     and Job (non-secure Josquin) data groupings, if present.
+##
+
+sub getRepertoryList {
+	my ($basedir) = @_;
+	my @list = glob("$basedir/[A-Y][a-z][a-z]/kern");
+	my @output;
+	my $ano = 0;
+	for (my $i=0; $i<@list; $i++) {
+		$list[$i] =~ s/$basedir\///;
+		$list[$i] =~ s/\/kern$//;
+		next if $list[$i] eq "Joa";  # ignore secure Josquin group if present
+		next if $list[$i] eq "Job";  # ignore non-secure Josquin group if present
+		if ($list[$i] eq "Ano") {
+			$ano = 1;
+			next;
+		}
+		$output[@output] = $list[$i];
+	}
+	# Place Anonymous list first
+	@output = sort @output;
+	unshift(@output, "Ano");
+	return @output;
+}
+
+
+
+##############################
+##
+## getComposerList -- Get the contents of the composer.txt file in
+##    info/composer.txt.  Each line contains three tab-separated elements:
+##    (1) The composer abbreviation ([A-Z][a-z][a-z])
+##    (2) The composer's name
+##    (3) The composer's dates
+##
+
+sub getComposerList {
+	my ($file) = @_;
+	open (FILE, $file) or die "Cannot find composer list $file\n";
+	my $line;
+	my %output;
+	while ($line = <FILE>) {
+		chomp $line;
+		next if $line =~ /^\s*$/;
+		my @data = split(/\t+/, $line);
+		next if @data < 3;
+		my $abbr  = $data[0];
+		my $name  = $data[1];
+		my $dates = $data[2];
+		$output{$abbr} = "$name\t$dates";
+	}
+	close FILE;
+	return %output;
+}
+
+
+
+##############################
+##
+## printRepertory -- Print a composer's worklist given the
+##     input abbreviation for the composer, such as Agr for Agricola.
+##     there is a header of information and then the list of works
+##     is printed as an array for the "works" property.
+##
+
+sub printRepertory {
+	my ($basedir, $rep, $commaQ) = @_;
+
+	my %worklist = processRepertory($basedir, $rep);
+
+	my $workcount  = $worklist{"workcount"}    || 0;
+	my $masscount  = $worklist{"masscount"}    || 0;
+	my $motetcount = $worklist{"motetcount"}   || 0;
+	my $songcount  = $worklist{"songcount"}    || 0;
+	my $notecount  = $worklist{"notecount"}    || 0;
+	my $seconds    = $worklist{"seconds"}      || 0;
+	my $pages      = $worklist{"pg"}           || 0;
+	my $worklist   = $worklist{"worklist"};
+	my $comshort   = $worklist{"comshort"}     || "";
+	my $comlong    = $worklist{"comlong"}      || "";
+	my $comdates   = $worklist{"comdates"}     || "";
+	my $liststyle  = "genre";
+	#$liststyle  = "alphabetical";
+
+print <<EOT;
+{
+"repid"		:	"$rep",
+"reprole"	:	"composer",
+"comlong"	:	"$comlong",
+"comshort"	:	"$comshort",
+"comdates"	:	"$comdates",
+"repwork"	:	$workcount,
+"genres"	:
+	[
+	{"name":"mass", "count":$masscount},
+	{"name":"motet", "count":$motetcount},
+	{"name":"song", "count":$songcount}
+	],
+"liststyle"	:	"$liststyle",
+"notecount"	:	$notecount,
+"sec"		:	$seconds,
+"pg"		:	$pages,
+EOT
+
+	print "\"works\"	:\n";
+	print "\t[\n";
+	my $ref = $worklist{"worklist"};
+	my @worklist = @$ref;
+	printWorkList(@worklist);
+	print "\t]\n";
+	print "}";
+	print "," if $commaQ;
+	print "\n";
+}
+
+
+
+##############################
+##
+## printWorkList -- Print the precalculated list of works
+##    for a composer.  Eventually this list will be sorted
+##    in this function based on the number of works to print.
+##
+
+sub printWorkList {
+	my @worklist = @_;
+	my $size = @worklist;
+	for (my $i=0; $i<@worklist; $i++) {
+		my $text = $worklist[$i];
+		if ($i < $#worklist) {
+			$text =~ s/\n$/,\n/;
+		}
+		print $text;
+	}
+}
+
+
+
+##############################
+##
+## getSections --
+##
+
+sub getSections {
+	my @files = @_;
+	my %output;
+	for (my $i=0; $i<@files; $i++) {
+		my $file = $files[$i];
+		my $id = $file;
+		$id =~ s/.*\///;
+		$id =~ s/.krn$//;
+		if ($id !~ /^([A-Z][a-z][a-z]\d{4}[^-]*)-?/) {
+			die "Error: file does not have a correctly formatted ID: $file\n";
+		}
+		$id = $1;
+		if ($id !~ /^([A-Z][a-z][a-z]\d{4}\.?\d*)(.*)/) {
+			die "Error: ID is not well formatted: $id\n";
+		}
+		my $workid = $1;
+		my $section = $2;
+		if ($output{$workid} !~ /^\s*$/) {
+			$output{$workid} .= "\t$id";
+		} else {
+			$output{$workid} = $id;
+		}
+	}
+	return %output;
+}
+
+
+##############################
+##
+## getFilesByWork -- Returns a list of work files.  Each entry is one work,
+##    And each work consists of one or more tab-separated filenames.
+##
+
+sub getFilesByWork {
+	my ($basedir, $rep) = @_;
+	my %list;
+	my @output;
+	my @files = sort glob("$basedir/$rep/kern/*.krn");
+	my %list;
+	my $workid;
+	my $id;
+	foreach my $file (@files) {
+		my $id = $file;
+		$id =~ s/^.*\///;
+		$id =~ s/-.*//;
+		$id =~ s/\.krn$//;
+		if ($id !~ /^([A-Z][a-z][a-z]\d{4}\.?\d*)/) {
+			die "Problem extracting work ID from $file";
+		}
+		$workid = $1;
+		if ($list{$workid} !~ /^\s*$/) {
+			$list{$workid} .= "\t$file";
+		} else {
+			$list{$workid} = $file;
+		}
+	}
+	my @keys = sort keys %list;
+	my @output;
+	foreach my $key (@keys) {
+		$output[@output] = $list{$key};
+	}
+	return @output;
+}
+
+
+
+##############################
+##
+## processRepertory -- Return the work list information for a
+##     given repertory.
+##
+
+sub processRepertory {
+	my ($basedir, $rep) = @_;
+	my %output;
+
+	my $cinfo = $Composer{$rep};
+	print STDERR "PROCESSING COMPOSER\t$cinfo\n";
+	my @cdata  = split(/\t+/, $cinfo);
+	my $cname  = $cdata[0];
+	my $cdates = $cdata[1];
+	$cdates = "" if $cdates eq ".";
+	my $comlong = $cname;
+	$comlong =~ s/[{}]+//g;
+	my $comshort = $cname;
+	$comshort =~ s/\}[^{]*\{//g;
+	$comshort =~ s/^[^{]*\{//;
+	$comshort =~ s/\}[^}]*$//;
+	$output{"comlong"} = $comlong;
+
+	if ($rep eq "Rue") {
+		$comshort = "La Rue";
+	}
+
+	$output{"comshort"} = $comshort;
+	$output{"comdates"} = $cdates;
+
+	# Get list of works, grouping sections into one tab-separated entry:
+	my @workfiles = getFilesByWork($basedir, $rep);
+	my $workcount = @workfiles;
+	$output{"workcount"} = $workcount;
+
+	my @workbuffer;
+	my %workinfo;
+
+	for (my $i=0; $i<@workfiles; $i++) {
+		my $entry = $workfiles[$i];
+		#print STDERR "PROCESSING FILE $entry\n";
+		my @files = split("\t", $entry);
+		if (@files > 1) {
+			%workinfo = getMultiSectionWorkInfo(@files);
+		} elsif (@files == 1) {
+			%workinfo = getSingleWorkInfo($files[0]);
+		} else {
+			die "Strange thing happened";
+		}
+
+		# Transfer parameters from extracted work
+		$output{"masscount"}  += $workinfo{"masscount"};
+		$output{"motetcount"} += $workinfo{"motetcount"};
+		$output{"songcount"}  += $workinfo{"songcount"};
+		$output{"notecount"}  += $workinfo{"notecount"};
+		$output{"seconds"}    += $workinfo{"seconds"};
+		$output{"pg"}         += $workinfo{"pg"};
+		$workbuffer[@workbuffer] = $workinfo{"data"};
+	}
+
+	$output{"worklist"} = \@workbuffer;
+
+	return %output;
+}
+
+
+
+##############################
+##
+## getMultiSectionWorkInfo --
+##
+
+sub getMultiSectionWorkInfo {
+	my @files = @_;
+	my %output;
+
+# do stuff here
+
+	return %output;
+}
+
+
+
+##############################
+##
+## getSingleWorkInfo --
+##
+
+sub getSingleWorkInfo {
+	my ($file) = @_;
+
+	my $id = $file;
+	$id =~ s/.*\///;
+	$id =~ s/.krn$//;
+	$id =~ s/-.*//;
+	my $workid;
+	if ($id =~ /^([A-Z][a-z][a-z]\d{4}\.?\d*)(.*)/) {
+		$workid = $1;
+	} else {
+		die "Poorly formed work ID for file $file\n";
+	}
+
+	my %output;
+	$output{"masscount"}  = 0;
+	$output{"motetcount"} = 0;
+	$output{"songcount"}  = 0;
+
+	open (FILE, $file) or die "Cannot open $file for reacing";
+	my @contents = <FILE>;
+	close FILE;
+	chomp @contents;
+
+	my $EEV = "";  # electronic edition version
+	my $END = "";  # encoding date
+	my %references;
+	my $exinterpindex = -1;
+	my $nameindex     = -1;
+	my $abbrindex     = -1;
+	for (my $i=$#contents; $i>0; $i--) {
+		my $line = $contents[$i];
+		if ($line =~ /^\*\*/) {
+			$exinterpindex = $i;
+			next;
+		}
+		if ($line =~ /^\*/) {
+			# interpretation line
+			if ($line =~ /\*I"/) {
+				$nameindex = $i;
+			} elsif ($line =~ /\*I'/) {
+				$abbrindex = $i;
+			}
+			next;
+		}
+		if ($line =~ /^!!!END\s*:\s*(.*)\s*$/) {
+			$END = $1;
+			next;
+		}
+		if ($line =~ /^!!!EEV\s*:\s*(.*)\s*$/) {
+			$EEV = $1;
+			next;
+		}
+		if ($line =~ /^!!!([^!:]+)\s*:\s*(.*)\s*$/) {
+			my $key = $1;
+			my $value = $2;
+			$references{$key} = $value;
+			# Deal with translations of reference values:
+			if ($key =~ /([^\@]+)\@+(.*)/) {
+				$references{$1} = $value;
+			}
+		}
+	}
+
+	# Extract the genre information
+	my $genre;
+	my $AGN = $references{"AGN"};
+	if ($AGN =~ /^\s*$/) {
+		print STDERR "Warning: no genre information in $file\n";
+	}
+	if ($AGN =~ /mass/i) {
+		$output{"masscount"} = 1;
+		$genre = "mass";
+	} elsif ($AGN =~ /motet/i) {
+		$output{"motetcount"} = 1;
+		$genre = "motet";
+	} elsif ($AGN =~ /song/i) {
+		$output{"songcount"} = 1;
+		$genre = "song";
+	} elsif ($AGN =~ /chanson/i) {
+		$output{"songcount"} = 1;
+		$genre = "song";
+	} else {
+		print STDERR "Warning: genre \"$AGN\" is not standardized\n";
+	}
+
+	# Extract title of work:
+	my $title = $references{"OTL"};
+
+	# Get list of voice names:
+	my @vnames;
+	if (($exinterpindex >= 0) && ($nameindex > 0)) {
+		@vnames = getKernValues($contents[$exinterpindex], $contents[$nameindex]);
+	}
+	my $vnamestring; # list of names of voices
+	$vnamestring = getReverseListString(@vnames);
+	if ($vnamestring =~ /""/) {
+		print STDERR "Warning: missing name $file\n";
+	} elsif ($vnamestring eq "[]") {
+		print STDERR "Warning: missing names in $file\n";
+	}
+
+	# Get abbreviations of voice names:
+	my @vabbrs;
+	if (($exinterpindex >= 0) && ($abbrindex > 0)) {
+		@vabbrs = getKernValues($contents[$exinterpindex], $contents[$abbrindex]);
+	}
+	my $vabbrstring; # abbreviation of voices
+	$vabbrstring = getReverseListString(@vabbrs);
+	if ($vabbrstring =~ /""/) {
+		print STDERR "Warning: missing abbreviation in $file\n";
+	} elsif ($vabbrstring eq "[]") {
+		print STDERR "Warning: missing abbreviations in $file\n";
+	}
+
+	# Get note counts by voice
+	my @vnotecounts = getVoiceNoteCounts($file, $contents[$exinterpindex]);
+	my $vnotecountstring = getReverseListNumber(@vnotecounts);
+
+	# Get the number of sounding notes in the score:
+	# my $notecount = `$notecount $file | $extractx -i sound | $ridx -H`;
+	my $notecount = $NoteCounts{$id};
+	die "Problem with notecount for $id\n" if $notecount =~ /^\s*$/;
+	$notecount = 0 if $notecount =~ /^\s*$/;
+	$output{"notecount"} = $notecount;
+
+	my $filename = $file;
+	$filename =~ s/.*\///;
+
+	# Get the number of voices.  Default to the number of voices
+	# present in the data, but also look for !!!voices: entry in
+	# case of missing voices from the original setting.
+	my $voices = @vnotecounts;
+
+	# Get addition date, which is extracted from END record.
+	my $ad = 0;
+	if ($END !~ /^\s*$/) {
+		$ad = getDateNumber($END);
+	}
+
+	# Get update date, which is extracted from EEV record.
+	my $ud = 0;
+	if ($EEV !~ /^\s*$/) {
+		$ud = getDateNumber($EEV);
+	}
+
+	my $pg = $PageCounts{$id};
+	$output{"pg"} = $pg;
+
+	my $ih = 0;            # height of incipit (no longer used)
+	my $sec = 0;           # seconds for performance (from MIDI files);
+
+	my $data = "";
+	$data .= "\t{\n";
+	$data .= "\t\"id\"\t\t:\t\"$workid\",\n";
+	$data .= "\t\"filename\"\t:\t\"$filename\",\n";
+	$data .= "\t\"title\"\t\t:\t\"$title\",\n";
+	$data .= "\t\"genre\"\t\t:\t\"$genre\",\n";
+	$data .= "\t\"voices\"\t:\t\"$voices\",\n";
+	$data .= "\t\"vname\"\t\t:\t$vnamestring,\n";
+	$data .= "\t\"vabbr\"\t\t:\t$vabbrstring,\n";
+	$data .= "\t\"ih\"\t\t:\t$ih,\n";
+	$data .= "\t\"notecount\"\t:\t$notecount,\n";
+	$data .= "\t\"sec\"\t\t:\t$sec,\n";
+	$data .= "\t\"pg\"\t\t:\t$pg,\n";
+	$data .= "\t\"vnotecount\"\t:\t$vnotecountstring,\n";
+	$data .= "\t\"ad\"\t\t:\t$ad,\n";
+	$data .= "\t\"ud\"\t\t:\t$ud\n";
+	$data .= "\t}\n";
+	$output{"data"} = $data;
+
+	return %output;
+}
+
+
+
+##############################
+##
+## getKernValues -- given an exclusive interpretation line and a 
+##   interpretation or data line, return the values for those lines.
+##   Any *I", *I', or * prefix text will be removed.
+##
+
+sub getKernValues {
+	my ($exline, $line) = @_;
+	my @edata = split(/\t+/, $exline);
+	my @data = split(/\t+/, $line);
+	my @output;
+	for (my $i=0; $i<@edata; $i++) {
+		next if $edata[$i] ne "**kern";
+		my $value = $data[$i];
+		$value =~ s/^\*I"//;
+		$value =~ s/^\*I'//;
+		$value =~ s/^\*//;
+		$output[@output] = $value;
+	}
+	return @output;
+}
+
+
+
+##############################
+##
+## getReverseListString -- return a JSON array string in the reverse order
+##   of the input array of strings.
+##
+
+sub getReverseListString {
+	my @list = @_;
+	my $output = "[";
+	for (my $i=$#list; $i>=0; $i--) {
+		$output .= '"';
+		my $value = $list[$i];
+		$value =~ s/"/\\"/g;
+		$output .= $value;
+		$output .= '"';
+		if ($i > 0) {
+			$output .= ",";
+		}
+	}
+	$output .= "]";
+	return $output;
+}
+
+
+##############################
+##
+## getReverseListNumber -- return a JSON array string in the reverse order
+##   of the input array of numbers.
+##
+
+sub getReverseListNumber {
+	my @list = @_;
+	my $output = "[";
+	for (my $i=$#list; $i>=0; $i--) {
+		my $value = int($list[$i]);
+		$output .= $value;
+		if ($i > 0) {
+			$output .= ",";
+		}
+	}
+	$output .= "]";
+	return $output;
+}
+
+
+
+##############################
+##
+## getDateNumber -- return a number such as:
+##    2009       as 20090000
+##    2009/1     as 20090100
+##    2009/1/4   as 20090104
+##    2009/04/15 as 20090415
+##
+
+sub getDateNumber {
+	my ($string) = @_;
+	if ($string =~ /(\d{4})\/(\d{2})\/(\d{2})/) {
+		return "$1$2$3";
+	}
+	if ($string =~ /(\d{4})\/(\d{0,2})\/(\d{0,2})/) {
+		my $year  = $1;
+		my $month = $2;
+		my $day   = $3;
+		$month    =~ s/^0+//;
+		$day      =~ s/^0+//;
+		$month    = "0$month" if $month < 10;
+		$day      = "0$day" if $day < 10;
+		return "$year$month$day";
+	}
+	if ($string =~ /(\d{4})\/(\d{,2})/) {
+		my $year  = $1;
+		my $month = $2;
+		my $day   = "00";
+		$month    =~ s/^0+//;
+		$month    = "0$month" if $month < 10;
+		return "$year$month$day";
+	}
+	if ($string =~ /(\d{4})/) {
+		my $year  = $1;
+		my $month = "00";
+		my $day   = "00";
+		return "$year$month$day";
+	}
+
+	# invalid format, so return 0
+	return 0;
+}
+
+
+
