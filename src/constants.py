@@ -10,6 +10,11 @@ DURATION_MAP = {
     '16': 0.0625,
     '32': 0.03125, 
 }
+TRIPLET_DURATION_MAP = {
+    '3': 0.333,
+    '6': 0.166,
+}
+
 PITCH_TO_MIDI = {
     'CCC': 24, 'DDD-': 25, 'DDD': 26, 'EEE-': 27, 'EEE': 28, 'FFF': 29, 'GGG-': 30, 'GGG': 31, 'AAA-': 32, 'AAA': 33, 'BBB-': 34, 'BBB': 35,
     'CC': 36, 'DD-': 37, 'DD': 38, 'EE-': 39, 'EE': 40, 'FF': 41, 'GG-': 42, 'GG': 43, 'AA-': 44, 'AA': 45, 'BB-': 46, 'BB': 47,

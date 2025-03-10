@@ -142,7 +142,7 @@ class ConsistencyChecker:
     def check_file_header_consistency(self, files):
         """Check consistency of headers across files."""
         # Define required headers to check for
-        required_headers = {'COM', 'JRPID', 'VOICES', 'OTL'}
+        required_headers = {'JRPID', 'VOICES'}
         headers_by_composer = defaultdict(lambda: defaultdict(set))
         
         for file_path in files:
@@ -230,6 +230,7 @@ class ConsistencyChecker:
                                     time_sig = token[2:]  # Remove '*M' prefix
                                     if not (re.match(r'^\d+/\d+$', time_sig) or  # e.g. "2/1"
                                            re.match(r'^\d+$', time_sig) or     # e.g. "3"
+                                           re.match(r'^\d+/\d+%\d+$', time_sig) or  # e.g. "3/3%2"
                                            time_sig == '*'):                   # Copy previous
                                         self.consistency_issues["time_signature"].append(
                                             f"Invalid time signature format in {filename}: {token}"
@@ -323,6 +324,27 @@ class ConsistencyChecker:
         print(f"Found {len(self.placeholder_files)} placeholder files (excluded from further checks)")
         return valid_files
     
+    def check_voice_indicator_format(self, files):
+        """Check that voice indicators follow the standard format '!!!voices: N' where N is an integer."""
+        for file_path in files:
+            filename = os.path.basename(file_path)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    for line_num, line in enumerate(f, 1):
+                        if line.startswith('!!!voices:'):
+                            # Extract everything after the colon and strip whitespace
+                            voice_value = line.split(':', 1)[1].strip()
+                            
+                            # Check if it's a simple integer
+                            if not re.match(r'^\d+$', voice_value):
+                                self.consistency_issues["voice_format"].append(
+                                    f"Non-standard voice indicator in {filename} (line {line_num}): {line.strip()}. "
+                                )
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(
+                    f"Error reading {filename} for voice indicator check: {str(e)}"
+                )
+    
     def run_all_checks(self):
         """Run all consistency checks."""
         composer_dirs = self.find_all_composers()
@@ -338,6 +360,7 @@ class ConsistencyChecker:
         self.check_time_signature_consistency(valid_files)
         self.check_voice_consistency(valid_files)
         self.check_percent_sign_lines(valid_files)
+        self.check_voice_indicator_format(valid_files)
         
         return self.consistency_issues
     
@@ -413,6 +436,7 @@ def main():
             dataset_path = TEST_DIR
             print(f"Default path doesn't exist, using test directory: {dataset_path}")
     
+    print()
     print(f"Checking dataset at: {dataset_path}")
     checker = ConsistencyChecker(dataset_path)
     checker.run_all_checks()

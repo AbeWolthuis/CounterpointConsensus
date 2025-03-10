@@ -7,7 +7,7 @@ from typing import List, Dict, Tuple
 import copy
 import pandas as pd
 
-from constants import DURATION_MAP, PITCH_TO_MIDI, MIDI_TO_PITCH
+from constants import DURATION_MAP, TRIPLET_DURATION_MAP, PITCH_TO_MIDI, MIDI_TO_PITCH
 from counterpoint_rules import RuleViolation
 from data_preparation import violations_to_df
 
@@ -123,11 +123,11 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                     if has_timesig:
                         # Parse time signatures for all voices
                         metadata_dict = parse_timesig(line, metadata, bar_count)
-                        if DEBUG: print(f"Found time signatures at bar {bar_count}: {metadata_dict['time_signatures'][-1][1]}")
+                        # if DEBUG: print(f"Found time signatures at bar {bar_count}: {metadata_dict['time_signatures'][-1][1]}")
                 elif line.startswith('*MM'):
                     # Metronome marking, present in some files, but we don't use this.
                     continue
-                elif line.startswith('*met'):
+                elif '*met' in line:
                     # TODO: check if we need to implement this later (mensural)
                     continue
                 elif line.startswith(('**kern', '*staff', '*clef')):
@@ -141,12 +141,14 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
             elif line.startswith('='):
                 # Update bars according to the barnumber found. Note, this might reset the barnumbers, depending on how they are encoded/
                 try:
-                    bar_num = int(''.join(filter(str.isdigit, line)))
+                    # Extract only digits from the line
+                    digits_only = ''.join(c for c in line.split()[0] if c.isdigit())
+                    bar_num = int(digits_only)
                     if bar_num < bar_count:
                         raise ValueError(f"Bar number {bar_num} is lower than the previous bar number {bar_count}") 
                     bar_count = bar_num
-                except AttributeError as ae:
-                    raise ae
+                except Exception as e:
+                    raise ValueError(f"Could not parse bar number from line: '{line.strip()}'. Error: {str(e)}")
 
                             
             else: 
@@ -214,6 +216,8 @@ def kern_token_to_note(
 
             if c in DURATION_MAP:
                 new_note.duration = DURATION_MAP[c]
+            elif c in TRIPLET_DURATION_MAP:
+                raise NotImplementedError("Triplets not yet implemented.")
             elif c in PITCH_TO_MIDI:
                 ''' First, set the note without regarding accidentals. '''
                 pitch_token = c
@@ -310,36 +314,64 @@ def parse_timesig(line: str, metadata: dict, bar_count: int) -> dict:
     """ Parse a time signature token and update the metadata dict """
         
     time_sig_tokens = line.strip().split('\t')
-    time_signatures = []
+    time_signatures = [] 
     
+    # First pass: Extract all valid time signatures
     for token in time_sig_tokens: 
-        if token.startswith('*M'):
+        time_sig = token
+        if time_sig.startswith('*M'):
             time_sig = token[2:]  # Remove '*M' prefix to get e.g. "2/1"
+
+            # Handle various formats of time signatures
             if '/' in time_sig:
-                numerator, denominator = map(int, time_sig.split('/'))
-                time_signatures.append((numerator, denominator))
-            elif '*' in time_sig:
-                time_signatures.append('*')
-            else:
-                # Handle cases where only numerator is specified
+                if '%' in time_sig:
+                    # Assumed format like 'M*3/3%2'
+                    try:
+                        time_sig = time_sig.split('/')[1]
+                        numerator, denominator = (int(part) for part in time_sig.split('%'))
+                        time_signatures.append((numerator, denominator))
+                    except Exception as e:
+                        raise ValueError(f"Could not parse time-sig '{time_sig}' in token '{token}'. Original error: {str(e)}")
+                else:
+                    # Format like "2/1"
+                    try:
+                        numerator, denominator = (int(part) for part in time_sig.split('/'))
+                        time_signatures.append((numerator, denominator))
+                    except Exception as e:
+                        raise ValueError(f"Could not parse time-sig '{time_sig}' in token '{token}'. Original error: {str(e)}")
+            
+            elif len(time_sig) == 1 and time_sig.isdigit():
+                # Handle cases where only numerator is specified, like "3"
                 time_signatures.append((int(time_sig), 1))
+        elif time_sig.strip() == '*':
+            # Placeholder for copying previous time signature
+            time_signatures.append('*')
+        else:
+            raise ValueError(f"Could not parse token '{token}' in time signature '{time_sig}'.")
+            
 
     # Replace '*' with the previous time signature
-    for i, time_sig in enumerate(time_signatures):
+    for idx, time_sig in enumerate(time_signatures):
         if time_sig == '*':
-            time_signatures[i] = time_signatures[i-1]
+            if len(metadata['time_signatures']) == 0:
+                raise ValueError("Cannot copy previous time signature if there is no previous time signature.")
+            else:
+                time_signatures[idx] = metadata['time_signatures'][-1][1][idx]
             
     # Record the bar number of this change
     last_metadata_update_bar = bar_count
     barline_tuple = (last_metadata_update_bar, -1)
     
     # If this is not the first time signature encountered, set the ending of the previous one
-    if metadata['time_signatures']:
+    if len(metadata['time_signatures']) >= 1:
         # If the new time sig is at bar 10, then the previous one will be set from (0, 9), not (0, 10). This should happen everywhere.
-        metadata['time_signatures'][-1][0] = (metadata['time_signatures'][-1][0][0], last_metadata_update_bar - 1)
+        metadata['time_signatures'][-1] = ((metadata['time_signatures'][-1][0][0], last_metadata_update_bar - 1), metadata['time_signatures'][-1][1])
  
-    # Store time signatures with the bar number where they changed
+    # Store time signatures with the bar. This should happen everywhere. number where they changed
     metadata['time_signatures'].append((barline_tuple, time_signatures))
+    
+    if DEBUG:
+            print(f"Parsed time signatures at bar {bar_count}: {time_signatures}")
     
     return metadata
 
@@ -381,7 +413,7 @@ def parse_keysig(line: str, metadata: dict, bar_count: int, line_idx: int) -> di
                         # If this is not the first time signature encountered, set the ending of the previous one
                         if metadata['key_signatures']:
                             # If the new time sig is at bar 10, then the previous one will be set from (0, 9), not (0, 10). This should happen everywhere.
-                            metadata['key_signatures'][-1][0] = (metadata['key_signatures'][-1][0][0], last_metadata_update_bar - 1)
+                            metadata['key_signatures'][-1] = ((metadata['key_signatures'][-1][0][0], last_metadata_update_bar - 1), metadata['key_signatures'][-1][1])
 
                         # Add keysig to metadata
                         metadata['key_signatures'].append((barline_tuple, key_signature))

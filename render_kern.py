@@ -3,6 +3,7 @@ import os
 
 def render_kern():
     kern_file = os.path.join("data", "test", "Rue1024a.krn")
+    kern_file = os.path.join("data", "full", "more_than_10", "SELECTED", "Oke", "Oke1004.1c-Missa_Cuiusvis_toni-Credo-on_D.krn")
     # kern_file = os.path.join("data", "test", "extra_parFifth_rue1024a.krn")
     # 
     try:
