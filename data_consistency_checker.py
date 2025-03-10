@@ -29,6 +29,8 @@ COMPOSER_CODE_PATTERN = re.compile(r'^[A-Z]{3}$')  # Three uppercase letters
 FILE_PATTERN = re.compile(r'.*\.krn$')  # .krn files
 
 DEBUG = False
+MAX_EXAMPLES = 5  # Maximum number of examples to show in reports
+
 
 # Define consistency checks
 class ConsistencyChecker:
@@ -345,6 +347,69 @@ class ConsistencyChecker:
                     f"Error reading {filename} for voice indicator check: {str(e)}"
                 )
     
+    def check_for_duplicate_voice_declarations(self, files):
+        """Check for files that declare the voices metadata header multiple times."""
+        for file_path in files:
+            filename = os.path.basename(file_path)
+            voice_declaration_lines = []
+            
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    for line_num, line in enumerate(f, 1):
+                        if line.lower().startswith('!!!voices:'):
+                            voice_declaration_lines.append((line_num, line.strip()))
+                
+                if len(voice_declaration_lines) > 1:
+                    declaration_info = ", ".join([f"line {line_num}: '{text}'" for line_num, text in voice_declaration_lines])
+                    self.consistency_issues["duplicate_voice_declarations"].append(
+                        f"File {filename} has {len(voice_declaration_lines)} voice declarations: {declaration_info}"
+                    )
+                    
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(
+                    f"Error reading {filename} for duplicate voice declarations check: {str(e)}"
+                )
+    
+    def check_voice_indicator_lines(self, files):
+        """Check for multiple lines that start with *Ivo, *I", or *I' in each file."""
+        for file_path in files:
+            filename = os.path.basename(file_path)
+            voice_indicator_lines = []
+            
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    for line_num, line in enumerate(f, 1):
+                        # Check for lines that start with voice indicators
+                        if line.startswith('*Ivo') or line.startswith('*I"') or line.startswith("*I'"):
+                            voice_indicator_lines.append((line_num, line.strip()))
+                
+                # Group the indicators by type for better reporting
+                by_type = defaultdict(list)
+                for line_num, line in voice_indicator_lines:
+                    if line.startswith('*Ivo'):
+                        by_type['*Ivo'].append((line_num, line))
+                    elif line.startswith('*I"'):
+                        by_type['*I"'].append((line_num, line))
+                    elif line.startswith("*I'"):
+                        by_type["*I'"].append((line_num, line))
+                
+                # Check for issues: each type should appear at most once per file
+                for indicator_type, occurrences in by_type.items():
+                    if len(occurrences) > 1:
+                        # More than one line of this type in the file
+                        details = ", ".join([f"line {ln}: '{text}'" for ln, text in occurrences[:MAX_EXAMPLES]])
+                        if len(occurrences) > MAX_EXAMPLES:
+                            details += f", ... and {len(occurrences) - MAX_EXAMPLES} more"
+                        
+                        self.consistency_issues["voice_indicators"].append(
+                            f"File {filename} has {len(occurrences)} '{indicator_type}' indicator lines (should have at most 1): {details}"
+                        )
+                    
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(
+                    f"Error reading {filename} for voice indicator check: {str(e)}"
+                )
+        
     def run_all_checks(self):
         """Run all consistency checks."""
         composer_dirs = self.find_all_composers()
@@ -359,11 +424,13 @@ class ConsistencyChecker:
         self.check_file_header_consistency(valid_files)
         self.check_time_signature_consistency(valid_files)
         self.check_voice_consistency(valid_files)
-        self.check_percent_sign_lines(valid_files)
         self.check_voice_indicator_format(valid_files)
+        self.check_voice_indicator_lines(valid_files)  # Add new check
+        self.check_for_duplicate_voice_declarations(valid_files)
+        self.check_percent_sign_lines(valid_files)
         
         return self.consistency_issues
-    
+
     def generate_report(self):
         """Generate a report of all consistency issues."""
         if not self.consistency_issues:
@@ -371,39 +438,81 @@ class ConsistencyChecker:
             
         print("\n=== CONSISTENCY CHECK REPORT ===\n")
         
-        # First report placeholder files
-        placeholder_issues = self.consistency_issues.get("placeholder_files", [])
-        if placeholder_issues:
-            print(f"\n--- Placeholder Files ({len(placeholder_issues)} files) ---")
-            for issue in placeholder_issues[:10]:  # Limit output
-                print(f"  • {issue}")
-            
-            if len(placeholder_issues) > 10:
-                print(f"  ... and {len(placeholder_issues) - 10} more placeholder files")
+        # Define a priority order for reporting issues
+        # Critical issues first, informational issues last
+        priority_order = [
+            "placeholder_files",
+            "duplicate_voice_declarations",
+            "voice_indicators",
+            "voice_format",
+            "voice_count",
+            "missing_headers",
+            "file_naming",
+            "header_consistency",
+            "time_signature",
+            "file_reading",
+            "percent_signs"  # Informational only
+        ]
         
-        # Then report other issues
-        if not any(v for k, v in self.consistency_issues.items() if k != "placeholder_files"):
-            if not placeholder_issues:
-                print("✅ No consistency issues found!")
-            else:
-                print("✅ No other consistency issues found besides placeholder files!")
+        # Check if there are any issues at all
+        if not any(self.consistency_issues.values()):
+            print("✅ No consistency issues found!")
             return
-            
-        for check_type, issues in self.consistency_issues.items():
-            if check_type == "placeholder_files" or not issues:
+        
+        # Count total issues for the summary at the end
+        critical_issues = 0
+        informational_issues = 0
+        
+        # First report critical issues by priority
+        print("\n=== CRITICAL ISSUES ===")
+        has_critical_issues = False
+        
+        for check_type in priority_order:
+            # Skip percent_signs as they're informational
+            if check_type == "percent_signs":
                 continue
                 
-            print(f"\n--- {check_type.replace('_', ' ').title()} ({len(issues)} issues) ---")
-            for issue in issues[:10]:  # Limit output
+            issues = self.consistency_issues.get(check_type, [])
+            if issues:
+                has_critical_issues = True
+                print(f"\n--- {check_type.replace('_', ' ').title()} ({len(issues)} issues) ---")
+                for issue in issues[:MAX_EXAMPLES]:
+                    print(f"  • {issue}")
+                
+                if len(issues) > MAX_EXAMPLES:
+                    print(f"  ... and {len(issues) - MAX_EXAMPLES} more issues")
+                    
+                critical_issues += len(issues)
+            elif check_type == "voice_format":
+                # Explicitly report no issues for voice_format
+                print(f"\n--- Voice Format (0 issues) ---")
+                print("  ✅ No voice format issues found")
+        
+        if not has_critical_issues:
+            print("✅ No critical issues found!")
+        
+        # Then report informational issues (percent signs)
+        print("\n=== INFORMATIONAL NOTICES ===")
+        percent_issues = self.consistency_issues.get("percent_signs", [])
+        if percent_issues:
+            print(f"\n--- Percent Signs (Mensuration Symbols) ({len(percent_issues)} files) ---")
+            for issue in percent_issues[:MAX_EXAMPLES]:  # Use MAX_EXAMPLES instead of hardcoded 10
                 print(f"  • {issue}")
             
-            if len(issues) > 10:
-                print(f"  ... and {len(issues) - 10} more issues")
+            if len(percent_issues) > MAX_EXAMPLES:
+                print(f"  ... and {len(percent_issues) - MAX_EXAMPLES} more files")
                 
-        # Report complete summary count (excluding placeholder files)
-        other_issues = sum(len(issues) for k, issues in self.consistency_issues.items() 
-                          if k != "placeholder_files")
-        print(f"\nTotal issues found (excluding placeholder files): {other_issues}")
+            informational_issues = len(percent_issues)
+        else:
+            print("✅ No informational notices found!")
+                
+        # Report complete summary count
+        print(f"\n=== SUMMARY ===")
+        print(f"• Critical issues requiring attention: {critical_issues}")
+        print(f"• Informational notices: {informational_issues}")
+        #print(f"• Total files checked: {len(self.all_files)}")
+        print(f"• Placeholder files found: {len(self.placeholder_files)}")
+        print(f"• Valid files processed: {len(self.all_files) - len(self.placeholder_files)}")
 
 def main():
     parser = argparse.ArgumentParser(description='Check consistency of CounterpointConsensus dataset')

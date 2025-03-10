@@ -22,24 +22,33 @@ class RuleViolation:
         self.beat = beat
 
     def __repr__(self):
+        voice_info = None
+        
+        # Convert voice_indices from 0-indexed to 1-indexed for display
         if self.voice_indices:
-            voice_info = self.voice_indices
+            if isinstance(self.voice_indices, tuple) and all(isinstance(i, int) for i in self.voice_indices):
+                # For tuples of integers, add 1 to make them 1-indexed
+                voice_info = tuple(i + 1 for i in self.voice_indices)
+            else:
+                # For voice names, use as is
+                voice_info = self.voice_indices
         elif self.voice_names:
             voice_info = self.voice_names
-        else:
-            voice_info = None
-        
-        base_str = f"({self.rule_name}, bar={self.bar}"
+            
+        # Shorten rule name to 7 characters
+        short_rule = self.rule_name[:7] + '...'
+            
+        base_str = f"({short_rule}, bar={self.bar}"
         if self.beat:
             base_str += f", beat={self.beat}"
         if self.note_names:
             base_str += f", note={self.note_names}"
-        base_str += f", voice={voice_info}"
+        if voice_info is not None:
+            base_str += f", voice={voice_info}"
 
         base_str += ")"
 
         return base_str
-        # return (f"({self.rule_name}, bar={self.bar}, voice={voice_info})")
 
 class CounterpointRules:
     allowed_ranges_modern_names = {
@@ -76,7 +85,7 @@ class CounterpointRules:
 
     
     @staticmethod
-    def has_no_parallel_fiths(name, **kwargs) -> Dict[str, List[RuleViolation]]:
+    def no_parallel_fiths(name, **kwargs) -> Dict[str, List[RuleViolation]]:
         slice_cur = kwargs["slice1"]
         slice_prev = kwargs["slice2"]
         slice_index = kwargs["slice_index"]
@@ -91,14 +100,23 @@ class CounterpointRules:
                     # 1. First and second interval are perfect fifths (7 semitones)
                     # 2. The second slice notes are not tied over. Note, a repetition is also seen as a parallel perfect fifth.
                     if (interval2 == interval1) and (slice_cur.notes[voice_pair[0]].new_occurrence and slice_cur.notes[voice_pair[1]].new_occurrence):
-                        violations.append(RuleViolation(rule_name=name, slice_index=slice_index, bar=slice_cur.bar,
-                            voice_indices=(metadata['voice_names'][voice_pair[0]], metadata['voice_names'][voice_pair[1]]),
-                            note_names=(slice_cur.notes[voice_pair[0]].note_name, slice_cur.notes[voice_pair[1]].note_name)))
+                        # Include notes from both slices: first the previous slice, then the current slice
+                        prev_notes = (slice_prev.notes[voice_pair[0]].note_name, slice_prev.notes[voice_pair[1]].note_name)
+                        curr_notes = (slice_cur.notes[voice_pair[0]].note_name, slice_cur.notes[voice_pair[1]].note_name)
+                        all_notes = prev_notes + curr_notes
+                        
+                        violations.append(RuleViolation(
+                            rule_name=name, 
+                            slice_index=slice_index, 
+                            bar=slice_cur.bar,
+                            voice_indices=voice_pair,
+                            note_names=all_notes
+                        ))
         return violations
     
 
     @staticmethod
-    def has_valid_range(name, **kwargs) -> Dict[str, List[RuleViolation]]:
+    def __has_valid_range__(name, **kwargs) -> Dict[str, List[RuleViolation]]:
         """
         Check that each note in the current slice is within its allowed MIDI range.
         

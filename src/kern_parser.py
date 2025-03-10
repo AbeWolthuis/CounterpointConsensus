@@ -34,8 +34,8 @@ metadata_template = {
     'attribution-level@Jos': '',
     'SEGMENT': '', # filename
 
-    'voices': [], # TODO list with number of voices for each score-movement 
-    'voice_names': [], # list of lists with voice names for each score-movement 
+    'voices': [], # list with number of voices for each score-movement  # TODO: support voices changing during piece
+    'voice_names': [], # list with voice names for each score-movement  # TODO: support voices changing during piece
     'key_signatures': [], # list of key signatures for each score-movement
     
     # Add time signatures to metadata template
@@ -94,7 +94,7 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                     metadata_key, metadata_value = metadata_linestarts_map[a], line.split(':')[1].strip()
                     metadata[metadata_key] = metadata_value
 
-            if line.startswith('*'):
+            elif line.startswith('*'):
                 if line.startswith('*I'):
                     # If diffferent voices are partway through the piece, raise an error
                     if bar_count > 0:
@@ -106,8 +106,11 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                         continue
                     elif line[2] == '"': # " represents long voice names
                         voice_names = [voice_name.replace('*I"', '') for voice_name in line.split()]
-                        barline_tuple = (last_metadata_update_bar, -1)
-                        metadata['voice_names'].append((barline_tuple, voice_names))
+                        metadata['voice_names'] = voice_names
+
+                        # TODO: support voices changing during piece
+                        # barline_tuple = (last_metadata_update_bar, -1)
+                        # metadata['voice_names'].append((barline_tuple, voice_names))
                     else:
                         raise NotImplementedError("Something in parsing voices (*I) not yet implemented.")
                 elif line.startswith('*k'):
@@ -131,6 +134,10 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                     # TODO: check if we need to implement this later (mensural)
                     continue
                 elif line.startswith(('**kern', '*staff', '*clef')):
+                    # Ignored headers
+                    continue
+                elif line.startswith('*-'):
+                    # Ignored barlines
                     continue
                 elif line.startswith('*>'):
                     # Lines indicating structure, or the begin of the structure.
@@ -139,18 +146,26 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                     raise NotImplementedError(f"Some metadata starting with * not yet implemented. Line {line_idx}: {line}")
             
             elif line.startswith('='):
-                # Update bars according to the barnumber found. Note, this might reset the barnumbers, depending on how they are encoded/
+                # Update bars according to the barnumber found
                 try:
                     # Extract only digits from the line
                     digits_only = ''.join(c for c in line.split()[0] if c.isdigit())
-                    bar_num = int(digits_only)
-                    if bar_num < bar_count:
-                        raise ValueError(f"Bar number {bar_num} is lower than the previous bar number {bar_count}") 
-                    bar_count = bar_num
+
+                    if digits_only:
+                        bar_num = int(digits_only)
+                        if bar_num < bar_count:
+                            raise ValueError(f"Bar number {bar_num} is lower than the previous bar number {bar_count}") 
+                        bar_count = bar_num
+                    
+                    # Add barline to note section regardless of whether it has a number
+                    # This ensures barlines are properly processed in parse_note_section.
+                    note_section.append(line)
+                    
                 except Exception as e:
                     raise ValueError(f"Could not parse bar number from line: '{line.strip()}'. Error: {str(e)}")
-
-                            
+            elif False:
+                # try-except-else is such weird syntax
+                continue
             else: 
                 note_section.append(line)
 
@@ -217,7 +232,21 @@ def kern_token_to_note(
             if c in DURATION_MAP:
                 new_note.duration = DURATION_MAP[c]
             elif c in TRIPLET_DURATION_MAP:
-                raise NotImplementedError("Triplets not yet implemented.")
+                # Detect triplet format. E.g. '3%2.B-' or '6e'
+                if i+2 < len(kern_token) and kern_token[i+1] == '%':
+                    # splice 3%2
+                    triplet_duration_token = kern_token[i:i+3].split('%') 
+                    duration = TRIPLET_DURATION_MAP[triplet_duration_token[0]]
+                    duration_modifier = triplet_duration_token[1] 
+                    # Set the duration
+                    new_note.duration = duration * int(duration_modifier)
+                    i += 2
+                elif i+1 < len(kern_token) and kern_token[i+1] in PITCH_TO_MIDI:
+                    # splice 6e
+                    new_note.duration = TRIPLET_DURATION_MAP[c]
+                else:
+                    raise ValueError(f"Could not parse triplet duration '{c}' in token '{kern_token}'")
+
             elif c in PITCH_TO_MIDI:
                 ''' First, set the note without regarding accidentals. '''
                 pitch_token = c
@@ -429,6 +458,7 @@ def post_process_salami_slices(salami_slices: List[SalamiSlice], metadata) -> Tu
     salami_slices, metadata = order_voices(salami_slices, metadata)
     salami_slices = remove_barline_slice(salami_slices, metadata)
     salami_slices = set_interval_property(salami_slices)
+    salami_slices = calculate_offsets(salami_slices)  # Add offset calculation
 
     return salami_slices, metadata
 
@@ -464,6 +494,7 @@ def order_voices(salami_slices: List[SalamiSlice], metadata: Dict[str, any]) -> 
         for voice, note in enumerate(salami_slice.notes):
             if note.note_type == 'note':
                 highest_notes[voice] = max(highest_notes[voice], note.midi_pitch)
+
     # Reorder the voices in the salami slices, and metadata. Highest voice at index 0.
     voice_order = sorted(range(metadata['voices']), key=lambda x: highest_notes[x], reverse=True)
     for salami_slice in salami_slices:
@@ -471,10 +502,34 @@ def order_voices(salami_slices: List[SalamiSlice], metadata: Dict[str, any]) -> 
         salami_slice.notes = [salami_slice.notes[voice] for voice in voice_order]
 
     # Make names lowercase
-    metadata['voice_names'] = [metadata['voice_names'][voice].lower() for voice in voice_order]
+    metadata['voice_names'] = [metadata['voice_names'][_voice].lower() for _voice in voice_order]
 
     return salami_slices, metadata
+
+def calculate_offsets(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
+    """ Calculate the offset of each slice from the beginning of its bar """
+    current_offset = 0
+    current_bar = 1  # Start with bar 1
     
+    for i, slice in enumerate(salami_slices):
+        # If this is a new bar, reset the offset
+        if slice.bar != current_bar:
+            current_offset = 0
+            current_bar = slice.bar
+        
+        # Set the offset for this slice
+        slice.offset = current_offset
+        
+        # Calculate the next offset based on this slice's duration
+        # Use the shortest duration as the increment (usually the first voice is sufficient)
+        if slice.notes and any(note and note.note_type in ('note', 'rest') for note in slice.notes):
+            # Find the first valid note/rest duration
+            for note in slice.notes:
+                if note and note.note_type in ('note', 'rest'):
+                    current_offset += note.duration
+                    break
+    
+    return salami_slices
 
 def validate_all_rules(salami_slices, metadata, cp_rules):
     violations = defaultdict(list)
@@ -515,8 +570,8 @@ def feature_counts(violations: Dict[str, List[RuleViolation]]) -> Dict[str, int]
 if __name__ == "__main__":
     # filepath = os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn")
     # filepath = os.path.join("..", "data", "test", "Jos1408-test.krn")
-    filepath = os.path.join("..", "data", "test", "Rue1024a.krn")
-    # filepath = os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")
+#     filepath = os.path.join("..", "data", "test", "Rue1024a.krn")
+    filepath = os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")
     
     salami_slices, metadata = parse_kern(filepath)
     salami_slices, metadata = post_process_salami_slices(salami_slices, metadata)
