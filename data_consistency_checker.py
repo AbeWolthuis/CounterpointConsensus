@@ -343,9 +343,7 @@ class ConsistencyChecker:
                                     f"Non-standard voice indicator in {filename} (line {line_num}): {line.strip()}. "
                                 )
             except Exception as e:
-                self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename} for voice indicator check: {str(e)}"
-                )
+                self.consistency_issues["file_reading"].append(f"Error reading {filename} for voice indicator check: {str(e)}")
     
     def check_for_duplicate_voice_declarations(self, files):
         """Check for files that declare the voices metadata header multiple times."""
@@ -367,8 +365,7 @@ class ConsistencyChecker:
                     
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename} for duplicate voice declarations check: {str(e)}"
-                )
+                    f"Error reading {filename} for duplicate voice declarations check: {str(e)}")
     
     def check_voice_indicator_lines(self, files):
         """Check for multiple lines that start with *Ivo, *I", or *I' in each file."""
@@ -407,7 +404,47 @@ class ConsistencyChecker:
                     
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename} for voice indicator check: {str(e)}"
+                    f"Error reading {filename} for voice indicator check: {str(e)}"                )
+    
+    def check_for_single_voice_files(self, files):
+        """Identify files that contain only a single voice."""
+        for file_path in files:
+            filename = os.path.basename(file_path)
+            has_single_voice = False
+            
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    declared_voices = None
+                    actual_voices = None
+                    
+                    for line in f:
+                        # Check for voice count declaration
+                        if line.startswith('!!!voices:'):
+                            try:
+                                declared_voices = int(line.split(':')[1].strip())
+                                if declared_voices == 1:
+                                    has_single_voice = True
+                            except ValueError:
+                                # Already handled by check_voice_indicator_format
+                                pass
+                            
+                        # Check actual voices in the data
+                        if line.startswith('**'):
+                            actual_voices = line.count('**kern')
+                            if actual_voices == 1:
+                                has_single_voice = True
+                            break
+                    
+                    if has_single_voice:
+                        declared_info = f"declared={declared_voices}" if declared_voices is not None else "declaration not found"
+                        actual_info = f"actual={actual_voices}" if actual_voices is not None else "actual count not found"
+                        self.consistency_issues["single_voice_files"].append(
+                            f"File {filename} contains only a single voice ({declared_info}, {actual_info})"
+                        )
+                        
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(
+                    f"Error reading {filename} for single voice check: {str(e)}"
                 )
         
     def run_all_checks(self):
@@ -428,6 +465,7 @@ class ConsistencyChecker:
         self.check_voice_indicator_lines(valid_files)  # Add new check
         self.check_for_duplicate_voice_declarations(valid_files)
         self.check_percent_sign_lines(valid_files)
+        self.check_for_single_voice_files(valid_files)  # Add new check
         
         return self.consistency_issues
 
@@ -445,13 +483,15 @@ class ConsistencyChecker:
             "duplicate_voice_declarations",
             "voice_indicators",
             "voice_format",
+            "single_voice_files",
             "voice_count",
             "missing_headers",
             "file_naming",
             "header_consistency",
             "time_signature",
             "file_reading",
-            "percent_signs"  # Informational only
+            "percent_signs",  # Informational only
+            
         ]
         
         # Check if there are any issues at all
@@ -483,10 +523,10 @@ class ConsistencyChecker:
                     print(f"  ... and {len(issues) - MAX_EXAMPLES} more issues")
                     
                 critical_issues += len(issues)
-            elif check_type == "voice_format":
-                # Explicitly report no issues for voice_format
-                print(f"\n--- Voice Format (0 issues) ---")
-                print("  ✅ No voice format issues found")
+            else:
+                # Report zero issues for all check types
+                check_name = check_type.replace('_', ' ').title()
+                print(f"\n--- {check_name} (0 issues) ✅ ---")
         
         if not has_critical_issues:
             print("✅ No critical issues found!")

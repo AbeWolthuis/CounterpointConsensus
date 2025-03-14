@@ -14,6 +14,12 @@ TRIPLET_DURATION_MAP = {
     '3': 0.333,
     '6': 0.166,
 }
+TIME_SIGNATURE_NORMALIZATION_MAP = {
+    1: 4,
+    2: 2,
+    4: 1,
+    8: 0.5,
+}
 
 PITCH_TO_MIDI = {
     'CCC': 24, 'DDD-': 25, 'DDD': 26, 'EEE-': 27, 'EEE': 28, 'FFF': 29, 'GGG-': 30, 'GGG': 31, 'AAA-': 32, 'AAA': 33, 'BBB-': 34, 'BBB': 35,

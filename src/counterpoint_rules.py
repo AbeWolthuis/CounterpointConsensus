@@ -110,7 +110,8 @@ class CounterpointRules:
                             slice_index=slice_index, 
                             bar=slice_cur.bar,
                             voice_indices=voice_pair,
-                            note_names=all_notes
+                            note_names=all_notes,
+                            beat=slice_cur.beat  # Include beat position
                         ))
         return violations
     

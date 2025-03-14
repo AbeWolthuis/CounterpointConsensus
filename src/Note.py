@@ -4,8 +4,9 @@ from constants import DURATION_MAP, PITCH_TO_MIDI, MIDI_TO_PITCH
 
 
 class SalamiSlice:
-    def __init__(self, num_voices=-1, bar=-1) -> None:
-        self.offset = 0
+    def __init__(self, offset=-1, beat=-1, num_voices=-1, bar=-1, ) -> None:
+        self.offset = offset
+        self.beat = beat  # Position in bar in musical beats
         self.num_voices = num_voices
         self.notes = [None] * num_voices
         self.bar = bar
@@ -14,6 +15,8 @@ class SalamiSlice:
         self.reduced_intervals = None # Will be: Dict[Tuple[int, int], int]
 
     def add_note(self, note, voice):
+        if voice >= self.num_voices:
+            raise ValueError(f"Attempt to add note to voice {voice+1}, but slice only has {self.num_voices} voices")
         self.notes[voice] = note
 
     
@@ -47,8 +50,10 @@ class SalamiSlice:
         return intervals
     
     def __repr__(self):
-        print_str = "[" + ", ".join([str(note) for note in self.notes]) + "]\n"
-        return print_str
+        # Show both offset and beat in the representation
+        offset_str = f"offset={self.offset:.2f}, beat={self.beat}, "
+        notes_str = "[" + ", ".join([str(note) for note in self.notes]) + "]"
+        return f"{offset_str}{notes_str}\n"
 
 
     def check(self):
@@ -65,23 +70,25 @@ class Note():
                  midi_pitch: int = -1,
                  duration: float = -1,
                  note_type: str = None,
-                 new_occurence: bool = True) -> None:
+                 new_occurence: bool = True,
+                 is_triplet: bool = False) -> None:
         
         self.midi_pitch = midi_pitch
         self.duration = duration
         self.note_type = note_type
         self.new_occurrence = new_occurence
+        self.is_triplet = is_triplet
         return
     
     def __repr__(self):
         if self.note_type == 'note':
-            return f"({self.note_type}: {self.duration}, {self.midi_pitch})"
+            return f"({self.note_type}: {self.duration}, {self.note_name})"
         else:
             return f"({self.note_type}: {self.duration})"
         
     @property
     def octave_reduced(self) -> int:
-        """Compute the octave reduced note number based on MIDI pitch where A (MIDI 57) is 0."""
+        """Compute the octave reduced note number based on MIDI pitch where the note A (MIDI 57) is 0."""
         if self.midi_pitch == -1:
             return -1
         return (self.midi_pitch - 9) % 12
