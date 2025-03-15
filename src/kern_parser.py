@@ -200,27 +200,19 @@ def parse_note_section(note_section: List[str], metadata) -> List:
             new_note, accidental_tracker = kern_token_to_note(kern_token=token, accidental_tracker=accidental_tracker, line_idx=line_idx)
             new_salami_slice.add_note(note=new_note, voice=token_idx)
             
-            # Set the current bar based on extracted bar number or increment
-            if new_note.note_type == 'barline' and not barline_updated_flag:
-                barline_updated_flag = True
-                # If the note has an extracted bar number, use it
-                if hasattr(new_note, 'bar_number') and new_note.bar_number is not None:
+            # Update the current bar based on the barline
+            if new_note.note_type in ('barline', 'final_barline') and not barline_updated_flag:
+                if new_note.bar_number:
                     current_bar = new_note.bar_number
-                else:
-                    # Otherwise increment the counter
-                    current_bar += 1
-                # Reset the accidental tracker for the next measure
-                accidental_tracker = {key:0 for key in accidental_tracker}
-                
-            new_salami_slice.bar = current_bar
+                new_salami_slice.bar = current_bar
+                barline_updated_flag = True
+            elif new_note.note_type not in ('barline', 'final_barline'):
+                new_salami_slice.bar = current_bar
 
             if new_note.note_type == 'final_barline':
-                # TODO we can stop parsing here, as the rest of the metadata should be handled further in the 
                 # Check if there are remaining lines with notes after this one.
-                # This should not happen, but if it does, we should raise an error.
                 remaining_lines = note_section[line_idx+1:]
                 for remaining_idx, remaining_line in enumerate(remaining_lines):
-                    # Skip empty lines, comments, or metadata
                     if (not remaining_line.strip() or 
                         remaining_line.startswith('!') or 
                         remaining_line.startswith('*')):
@@ -228,10 +220,9 @@ def parse_note_section(note_section: List[str], metadata) -> List:
             elif new_note is None:
                 raise ValueError(f"Token '{token}' in line '{line}' lead to new_note being None.")
 
-        salami_slices.append(new_salami_slice)
-    
-    return salami_slices
+        salami_slices.append(new_salami_slice)              
 
+    return salami_slices
 
 def kern_token_to_note(
         kern_token: str,
@@ -329,347 +320,345 @@ def kern_token_to_note(
                     # The duration should already be set. Thus, we can multiply it by 1.5^dot_count
                     if new_note.duration == -1:
                         raise ValueError(f"Could not find duration for token '{kern_token}' and dot-count '{dot_count}'")
-                    new_note.duration *= 1.5**dot_countf present
+                    new_note.duration *= 1.5**dot_count
 
-                    i += dot_count - 11 < len(kern_token):
-            elif c == 'r':line
+                    i += dot_count - 1
+            elif c == 'r':
                 new_note.note_type = 'rest'
-            elif c == '=': 'final_barline'
-                if kern_token[i+1] == '=':   else:
+            elif c == '=':
+                # Check if it's a final barline (double equals)
+                if i+1 < len(kern_token) and kern_token[i+1] == '=':
                     new_note.note_type = 'final_barline'
-                else:to extract bar number
+                else:
                     new_note.note_type = 'barline'
-                # Skips until the after the barnumber. This should also always be the end of the line, since the barline token looks like '=123'.     if digits_str:
-                i += len(kern_token[i:]) - 1                    bar_number = int(digits_str)
-            else:              new_note.bar_number = bar_number  # Store bar number on the note
-                raise ValueError(f"Could not parse character '{c}' in token '{kern_token}', at index '{i}'")   
-        except Exception as e:                # Skip to the end of the token
-            print(f"For token '{kern_token}', char '{c}', index '{i}', encountered error:\n\n") len(kern_token[i:]) - 1
+                
+                # Extract bar number if present
+                digits_str = ''.join(d for d in kern_token[i:] if d.isdigit())
+                if digits_str:
+                    bar_number = int(digits_str)
+                    new_note.bar_number = bar_number
+                
+                # Skip to the end of the token
+                i += len(kern_token[i:]) - 1
+            else:
+                raise ValueError(f"Could not parse character '{c}' in token '{kern_token}', at index '{i}'")
+        except Exception as e:
+            print(f"For token '{kern_token}', char '{c}', index '{i}', encountered error:\n\n")
             raise e
-        {kern_token}', at index '{i}'")
-        i += 1        except Exception as e:
-    #endwhile:\n\n")
+        
+        i += 1
+    #endwhile
 
-    # Error checking        
-    if new_note.duration is None:        i += 1
+    # Error checking
+    if new_note.duration is None:
         raise ValueError(f"Could not find duration for token '{kern_token}'")
 
     # TODO: return the accidental tracker, because it is relevant for the entire measure
     return new_note, accidental_tracker
-raise ValueError(f"Could not find duration for token '{kern_token}'")
 
-"""Helper functions to parse all the different kinds of lines."""cidental tracker, because it is relevant for the entire measure
-return new_note, accidental_tracker
+
+"""Helper functions to parse all the different kinds of lines."""
+
 def parse_timesig(line: str, metadata: dict, bar_count: int) -> dict:
     """ Parse a time signature token and update the metadata dict """
-        arse all the different kinds of lines."""
+        
     time_sig_tokens = line.strip().split('\t')
     time_signatures = [] 
-        """ Parse a time signature token and update the metadata dict """
+    
     # First pass: Extract all valid time signatures
-    for token in time_sig_tokens: p().split('\t')
+    for token in time_sig_tokens: 
         time_sig = token
         if time_sig.startswith('*M'):
-            time_sig = token[2:]  # Remove '*M' prefix to get e.g. "2/1"t all valid time signatures
+            time_sig = token[2:]  # Remove '*M' prefix to get e.g. "2/1"
 
             # Handle various formats of time signatures
             if '/' in time_sig:
-                if '%' in time_sig: '*M' prefix to get e.g. "2/1"
+                if '%' in time_sig:
                     # Assumed format like 'M*3/3%2'
-                    try:various formats of time signatures
+                    try:
                         time_sig = time_sig.split('/')[1]
-                        numerator, denominator = (int(part) for part in time_sig.split('%'))n time_sig:
+                        numerator, denominator = (int(part) for part in time_sig.split('%'))
                         time_signatures.append((numerator, denominator))
                     except Exception as e:
-                        raise ValueError(f"Could not parse time-sig '{time_sig}' in token '{token}'. Original error: {str(e)}")g.split('/')[1]
-                else:
-                    # Format like "2/1"            time_signatures.append((numerator, denominator))
-                    try:
-                        numerator, denominator = (int(part) for part in time_sig.split('/'))_sig}' in token '{token}'. Original error: {str(e)}")
-                        time_signatures.append((numerator, denominator))
-                    except Exception as e:1"
                         raise ValueError(f"Could not parse time-sig '{time_sig}' in token '{token}'. Original error: {str(e)}")
-            minator = (int(part) for part in time_sig.split('/'))
-            elif len(time_sig) == 1 and time_sig.isdigit():           time_signatures.append((numerator, denominator))
+                else:
+                    # Format like "2/1"
+                    try:
+                        numerator, denominator = (int(part) for part in time_sig.split('/'))
+                        time_signatures.append((numerator, denominator))
+                    except Exception as e:
+                        raise ValueError(f"Could not parse time-sig '{time_sig}' in token '{token}'. Original error: {str(e)}")
+            
+            elif len(time_sig) == 1 and time_sig.isdigit():
                 # Handle cases where only numerator is specified, like "3"
-                time_signatures.append((int(time_sig), 1))            raise ValueError(f"Could not parse time-sig '{time_sig}' in token '{token}'. Original error: {str(e)}")
-        elif time_sig.strip() == '*':            
-            # Placeholder for copying previous time signaturesdigit():
-            time_signatures.append('*')is specified, like "3"
-        else:ures.append((int(time_sig), 1))
+                time_signatures.append((int(time_sig), 1))
+        elif time_sig.strip() == '*':
+            # Placeholder for copying previous time signature
+            time_signatures.append('*')
+        else:
             raise ValueError(f"Could not parse token '{token}' in time signature '{time_sig}'.")
             
-signatures.append('*')
+
     # Replace '*' with the previous time signature
-    for idx, time_sig in enumerate(time_signatures):raise ValueError(f"Could not parse token '{token}' in time signature '{time_sig}'.")
+    for idx, time_sig in enumerate(time_signatures):
         if time_sig == '*':
             if len(metadata['time_signatures']) == 0:
                 raise ValueError("Cannot copy previous time signature if there is no previous time signature.")
-            else:for idx, time_sig in enumerate(time_signatures):
+            else:
                 time_signatures[idx] = metadata['time_signatures'][-1][1][idx]
-            ]) == 0:
+            
     # Record the bar number of this change
     last_metadata_update_bar = bar_count
-    barline_tuple = (last_metadata_update_bar, INFINITY_BAR)               time_signatures[idx] = metadata['time_signatures'][-1][1][idx]
+    barline_tuple = (last_metadata_update_bar, INFINITY_BAR)
     
     # If this is not the first time signature encountered, set the ending of the previous one
-    if len(metadata['time_signatures']) >= 1:last_metadata_update_bar = bar_count
-        # If the new time sig is at bar 10, then the previous one will be set from (0, 9), not (0, 10). This should happen everywhere.uple = (last_metadata_update_bar, INFINITY_BAR)
+    if len(metadata['time_signatures']) >= 1:
+        # If the new time sig is at bar 10, then the previous one will be set from (0, 9), not (0, 10). This should happen everywhere.
         metadata['time_signatures'][-1] = ((metadata['time_signatures'][-1][0][0], last_metadata_update_bar - 1), metadata['time_signatures'][-1][1])
- # If this is not the first time signature encountered, set the ending of the previous one
-    # Store time signatures with the bar. This should happen everywhere. number where they changed['time_signatures']) >= 1:
-    metadata['time_signatures'].append((barline_tuple, time_signatures))        # If the new time sig is at bar 10, then the previous one will be set from (0, 9), not (0, 10). This should happen everywhere.
-    last_metadata_update_bar - 1), metadata['time_signatures'][-1][1])
+ 
+    # Store time signatures with the bar. This should happen everywhere. number where they changed
+    metadata['time_signatures'].append((barline_tuple, time_signatures))
+    
     if DEBUG:
-            print(f"Parsed time signatures at bar {bar_count}: {time_signatures}")    # Store time signatures with the bar. This should happen everywhere. number where they changed
-    es))
+            print(f"Parsed time signatures at bar {bar_count}: {time_signatures}")
+    
     return metadata
 
-def parse_keysig(line: str, metadata: dict, bar_count: int, line_idx: int) -> dict:            print(f"Parsed time signatures at bar {bar_count}: {time_signatures}")
-                        """ Parse a key signature token and update the metadata dict """
+def parse_keysig(line: str, metadata: dict, bar_count: int, line_idx: int) -> dict:
+    """ Parse a key signature token and update the metadata dict """
 
-                        # Check that all keysig tokens are identical
-                        keysig_tokens = line.strip().split('\t')
-                        if DEBUG: print(f"Keysig tokens: {' '.join(keysig_tokens)} at line {line_idx}")"
+    # Check that all keysig tokens are identical
+    keysig_tokens = line.strip().split('\t')
+    if DEBUG: print(f"Keysig tokens: {' '.join(keysig_tokens)} at line {line_idx}")
 
-                        if len(set(keysig_tokens)) != 1: k that all keysig tokens are identical
-                            raise ValueError("Different key signatures in voices not yet implemented.").split('\t')
-                        g tokens: {' '.join(keysig_tokens)} at line {line_idx}")
-                        # Use the first token to parse the key sig (they are indentical)
-                        keysig_token = keysig_tokens[0][3:] # Remove *k[ from the startysig_tokens)) != 1: 
-                        key_signature = {k:v for k,v in key_signature_template.items()} signatures in voices not yet implemented.")
-                        i = 0 
-                        while i < len(keysig_token):e key sig (they are indentical)
-                            c = keysig_token[i]Remove *k[ from the start
-                            if c == ']':ey_signature_template.items()}
-                                break
-                            elif c in key_signature.keys():):
-                                if keysig_token[i+1] == '+':
-                                    key_signature[c] += 1== ']':
-                                elif keysig_token[i+1] == '-':
-                                    key_signature[c] -= 1 in key_signature.keys():
-                                i += 1ysig_token[i+1] == '+':
-                            elif c  in ['+', '-']:                                    key_signature[c] += 1
-                                raise ValueError(f"Could not parse key signature '{keysig_token}', reached accidental '{c}' unpredictedly.")                     
-                            else:
-                                raise ValueError(f"Could not parse char '{c}' in key signature '{keysig_token}'")                     
-                            i += 1    elif c  in ['+', '-']:
-                            #endwhilental '{c}' unpredictedly.")                     
+    if len(set(keysig_tokens)) != 1: 
+        raise ValueError("Different key signatures in voices not yet implemented.")
+    
+    # Use the first token to parse the key sig (they are indentical)
+    keysig_token = keysig_tokens[0][3:] # Remove *k[ from the start
+    key_signature = {k:v for k,v in key_signature_template.items()}
+    i = 0 
+    while i < len(keysig_token):
+        c = keysig_token[i]
+        if c == ']':
+            break
+        elif c in key_signature.keys():
+            if keysig_token[i+1] == '+':
+                key_signature[c] += 1
+            elif keysig_token[i+1] == '-':
+                key_signature[c] -= 1
+            i += 1
+        elif c  in ['+', '-']:
+            raise ValueError(f"Could not parse key signature '{keysig_token}', reached accidental '{c}' unpredictedly.")                     
+        else:
+            raise ValueError(f"Could not parse char '{c}' in key signature '{keysig_token}'")                     
+        i += 1
+        #endwhile
 
-                        # Record the bar number of this change
-                        last_metadata_update_bar = bar_count
-                        barline_tuple = (last_metadata_update_bar, -1)                            #endwhile
-                        
-                        # If this is not the first time signature encountered, set the ending of the previous one
-                        if metadata['key_signatures']:                        last_metadata_update_bar = bar_count
-                            # If the new time sig is at bar 10, then the previous one will be set from (0, 9), not (0, 10). This should happen everywhere. (last_metadata_update_bar, -1)
-                            metadata['key_signatures'][-1] = ((metadata['key_signatures'][-1][0][0], last_metadata_update_bar - 1), metadata['key_signatures'][-1][1])                        
-e ending of the previous one
-                        # Add keysig to metadata                        if metadata['key_signatures']:
-                        metadata['key_signatures'].append((barline_tuple, key_signature))10). This should happen everywhere.
-gnatures'][-1] = ((metadata['key_signatures'][-1][0][0], last_metadata_update_bar - 1), metadata['key_signatures'][-1][1])
-                        return metadata
+    # Record the bar number of this change
+    last_metadata_update_bar = bar_count
+    barline_tuple = (last_metadata_update_bar, -1)
+    
+    # If this is not the first time signature encountered, set the ending of the previous one
+    if metadata['key_signatures']:
+        # If the new time sig is at bar 10, then the previous one will be set from (0, 9), not (0, 10). This should happen everywhere.
+        metadata['key_signatures'][-1] = ((metadata['key_signatures'][-1][0][0], last_metadata_update_bar - 1), metadata['key_signatures'][-1][1])
 
-"""Functions for post-processing the salami slices such that they can be analysed."""tuple, key_signature))
+    # Add keysig to metadata
+    metadata['key_signatures'].append((barline_tuple, key_signature))
+
+    return metadata
+
+"""Functions for post-processing the salami slices such that they can be analysed."""
 
 def post_process_salami_slices(salami_slices: List[SalamiSlice], metadata) -> Tuple[List[SalamiSlice], Dict[str, any]]:
     """ Post-process the salami slices.  """
     # Note, most of this could be done in one pass, but for developmental easy we do it in multiple passes.
     salami_slices = set_period_notes(salami_slices)
-    salami_slices, metadata = order_voices(salami_slices, metadata)ami_slices: List[SalamiSlice], metadata) -> Tuple[List[SalamiSlice], Dict[str, any]]:
-    salami_slices = remove_barline_slice(salami_slices, metadata)    """ Post-process the salami slices.  """
+    salami_slices, metadata = order_voices(salami_slices, metadata)
+    salami_slices = remove_barline_slice(salami_slices, metadata)
     salami_slices = set_interval_property(salami_slices)
-    salami_slices = calculate_offsets(salami_slices)  # Calculate raw offsets from bar startalami_slices)
+    salami_slices = calculate_offsets(salami_slices)  # Calculate raw offsets from bar start
     salami_slices = calculate_beat_positions(salami_slices, metadata)  # Convert offsets to beats
-    ve_barline_slice(salami_slices, metadata)
-    return salami_slices, metadata    salami_slices = set_interval_property(salami_slices)
-m bar start
-def remove_barline_slice(salami_slices: List[SalamiSlice], metadata: Dict[str, any]) -> Tuple[List[SalamiSlice], Dict[str, any]]:i_slices, metadata)  # Convert offsets to beats
+    
+    return salami_slices, metadata
+
+def remove_barline_slice(salami_slices: List[SalamiSlice], metadata: Dict[str, any]) -> Tuple[List[SalamiSlice], Dict[str, any]]:
     """ Remove all barline slices. """
     salami_slices = [salami_slice for salami_slice in salami_slices if salami_slice.notes[0].note_type != 'barline']
     return salami_slices
-(salami_slices: List[SalamiSlice], metadata: Dict[str, any]) -> Tuple[List[SalamiSlice], Dict[str, any]]:
-def set_interval_property(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:    """ Remove all barline slices. """
-    """ Set the intervals in the salami slices """i_slice.notes[0].note_type != 'barline']
+
+def set_interval_property(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
+    """ Set the intervals in the salami slices """
     for i, salami_slice in enumerate(salami_slices):
         salami_slice.absolute_intervals = salami_slice._calculate_intervals()
-        salami_slice.reduced_intervals = salami_slice._calculate_reduced_intervals()]) -> List[SalamiSlice]:
-    return salami_slicesices """
- enumerate(salami_slices):
-def set_period_notes(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:intervals()
-    """ Set the notes in the salami slices that are periods to the notes in the previous slice """rvals = salami_slice._calculate_reduced_intervals()
+        salami_slice.reduced_intervals = salami_slice._calculate_reduced_intervals()
+    return salami_slices
+
+def set_period_notes(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
+    """ Set the notes in the salami slices that are periods to the notes in the previous slice """
     for i, salami_slice in enumerate(salami_slices):
         for voice, note in enumerate(salami_slice.notes):
-            if note.note_type == 'period':ami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
-                if i == 0:    """ Set the notes in the salami slices that are periods to the notes in the previous slice """
+            if note.note_type == 'period':
+                if i == 0:
                     raise ValueError("Period note in first slice")
                 # Copy note, set 
-                salami_slice.notes[voice] = salami_slices[i-1].notes[voice]:
+                salami_slice.notes[voice] = salami_slices[i-1].notes[voice]
                 salami_slices[i-1].notes[voice].new_occurrence = False
-    return salami_slicesPeriod note in first slice")
+    return salami_slices
 
-def order_voices(salami_slices: List[SalamiSlice], metadata: Dict[str, any]) -> Tuple[List[SalamiSlice], Dict[str, any]]:] = salami_slices[i-1].notes[voice]
+def order_voices(salami_slices: List[SalamiSlice], metadata: Dict[str, any]) -> Tuple[List[SalamiSlice], Dict[str, any]]:
     """ Order the voices from low to high in the salami slices."""
-    # Find the highest note in each voice    return salami_slices
+    # Find the highest note in each voice
     highest_notes = [0] * metadata['voices']
-    for salami_slice in salami_slices:Slice], Dict[str, any]]:
-        for voice, note in enumerate(salami_slice.notes):igh in the salami slices."""
+    for salami_slice in salami_slices:
+        for voice, note in enumerate(salami_slice.notes):
             if note.note_type == 'note':
                 highest_notes[voice] = max(highest_notes[voice], note.midi_pitch)
-    for salami_slice in salami_slices:
+
     # Reorder the voices in the salami slices, and metadata. Highest voice at index 0.
     voice_order = sorted(range(metadata['voices']), key=lambda x: highest_notes[x], reverse=True)
-    for salami_slice in salami_slices:                highest_notes[voice] = max(highest_notes[voice], note.midi_pitch)
+    for salami_slice in salami_slices:
         # python magic ensures the notes are not overwritten during the for loop
         salami_slice.notes = [salami_slice.notes[voice] for voice in voice_order]
-    voice_order = sorted(range(metadata['voices']), key=lambda x: highest_notes[x], reverse=True)
-    # Sort all other metadata that is given per voice, according to the sorting of voice_order    for salami_slice in salami_slices:
-    metadata['voice_names'] = [metadata['voice_names'][_voice].lower() for _voice in voice_order]    # python magic ensures the notes are not overwritten during the for loop
-    salami_slice.notes = [salami_slice.notes[voice] for voice in voice_order]
-    for time_sig in metadata['time_signatures']:
-        metadata['time_signatures'] = [(time_sig[0], [time_sig[1][voice] for voice in voice_order])] is given per voice, according to the sorting of voice_order
+
+    # Sort all other metadata that is given per voice, according to the sorting of voice_order
     metadata['voice_names'] = [metadata['voice_names'][_voice].lower() for _voice in voice_order]
 
+    for time_sig in metadata['time_signatures']:
+        metadata['time_signatures'] = [(time_sig[0], [time_sig[1][voice] for voice in voice_order])]
+
+
     
-    _signatures'] = [(time_sig[0], [time_sig[1][voice] for voice in voice_order])]
+    
 
     return salami_slices, metadata
 
 def calculate_offsets(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
     """ Calculate the offset of each slice from the beginning of its bar """
-    current_offset = 0data
+    current_offset = 0
     current_bar = 1  # Start with bar 1
-    ulate_offsets(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
-    for i, slice in enumerate(salami_slices):ice from the beginning of its bar """
+    
+    for i, cur_slice in enumerate(salami_slices):
         # If this is a new bar, reset the offset
-        if slice.bar != current_bar:ent_bar = 1  # Start with bar 1
+        if cur_slice.bar != current_bar:
             current_offset = 0
-            current_bar = slice.bar
+            current_bar = cur_slice.bar
         
         # Set the offset for this slice
-        slice.offset = current_offset
+        cur_slice.offset = current_offset
         
         # Calculate the next offset based on this slice's duration
-        # Use the shortest duration as the increment (usually the first voice is sufficient)for this slice
-        if slice.notes and any(note and note.note_type in ('note', 'rest') for note in slice.notes):    slice.offset = current_offset
+        # Use the shortest duration as the increment (usually the first voice is sufficient)
+        if cur_slice.notes and any(note and note.note_type in ('note', 'rest') for note in cur_slice.notes):
             # Find the first valid note/rest duration
-            for note in slice.notes:        # Calculate the next offset based on this slice's duration
+            for note in cur_slice.notes:
                 if note and note.note_type in ('note', 'rest'):
-                    current_offset += note.durationif slice.notes and any(note and note.note_type in ('note', 'rest') for note in slice.notes):
+                    current_offset += note.duration
                     break
     
-    return salami_slices         if note and note.note_type in ('note', 'rest'):
+    return salami_slices
 
-def calculate_beat_positions(salami_slices: List[SalamiSlice], metadata) -> List[SalamiSlice]:reak
+def calculate_beat_positions(salami_slices: List[SalamiSlice], metadata) -> List[SalamiSlice]:
     """ 
     Calculate the beat position for each slice based on its offset and the time signature. 
     This assigns a beat property to each salami slice with its position in musical beats.
-    """def calculate_beat_positions(salami_slices: List[SalamiSlice], metadata) -> List[SalamiSlice]:
+    """
     # For each salami slice, find the applicable time signature and convert offset to beats
-    timesig_index = 0 on its offset and the time signature. 
-    current_time_sig_tuple = metadata['time_signatures'][timesig_index]mi slice with its position in musical beats.
-    for slice in salami_slices:
-        beat_per_voice = [] # Note: this will be a list with one value, except in debug mode.set to beats
-sig_index = 0
-        # Find the time signature in effect for this bares'][timesig_index]
-        if slice.bar > current_time_sig_tuple[0][1]:
-            # Move to the next time signaturept in debug mode.
+    timesig_index = 0
+    current_time_sig_tuple = metadata['time_signatures'][timesig_index]
+    for cur_slice in salami_slices:
+        beat_per_voice = [] # Note: this will be a list with one value, except in debug mode.
+
+        # Find the time signature in effect for this bar
+        if cur_slice.bar > current_time_sig_tuple[0][1]:
+            # Move to the next time signature
             timesig_index += 1
             current_time_sig_tuple = metadata['time_signatures'][timesig_index]
         
         current_time_sig = current_time_sig_tuple[1]
         if not current_time_sig_tuple or not current_time_sig:
-            raise ValueError(f"No time signature found for bar {slice.bar}")
+            raise ValueError(f"No time signature found for bar {cur_slice.bar}")
             
-        for voice_idx, _ in enumerate(slice.notes):                                       
-            ''' Convert raw offset to beat position.current_time_sig_tuple or not current_time_sig:
-            In a time signature like 3/4, one quarter-note spans 0.25 * (4/3) = 0.333 of the bar.slice.bar}")
+        for voice_idx, _ in enumerate(cur_slice.notes):                                       
+            ''' Convert raw offset to beat position.
+            In a time signature like 3/4, one quarter-note spans 0.25 * (4/3) = 0.333 of the bar.
             A third of a 3/4 bar means it spans the first beat: 0.25 * (4/3) * 3 = 1.
-            Since the note with offset 0 falls on beat 1, we need to add 1 to the beat position.lice.notes):                                       
-            So instead of : beat_value = (slice.offset * (numerator / denominator) * denominator) + 1''' Convert raw offset to beat position.
-            Then, we divide by (1 / 0.25*denominator), stored in a mapping, to normalize against note lengths.-note spans 0.25 * (4/3) = 0.333 of the bar.
-            '''3/4 bar means it spans the first beat: 0.25 * (4/3) * 3 = 1.
-            numerator, denominator = current_time_sig[voice_idx] note with offset 0 falls on beat 1, we need to add 1 to the beat position.
-            beat = slice.offset * numerator / TIME_SIGNATURE_NORMALIZATION_MAP[denominator]   + 1                                      So instead of : beat_value = (slice.offset * (numerator / denominator) * denominator) + 1
-            beat_per_voice.append(beat)ping, to normalize against note lengths.
+            Since the note with offset 0 falls on beat 1, we need to add 1 to the beat position.
+            So instead of : beat_value = (slice.offset * (numerator / denominator) * denominator) + 1
+            Then, we divide by (1 / 0.25*denominator), stored in a mapping, to normalize against note lengths.
+            '''
+            numerator, denominator = current_time_sig[voice_idx]
+            beat = cur_slice.offset * numerator / TIME_SIGNATURE_NORMALIZATION_MAP[denominator]   + 1                          
+            beat_per_voice.append(beat)
             
-            # If we're not in debug moe the beat oncent_time_sig[voice_idx]
-            if not DEBUG:minator]   + 1                          
+            # If we're not in debug moe the beat once
+            if not DEBUG:
                 break
-            
+
         # Check if all voices' beats are the same (only in debug mode)
         if DEBUG and len(beat_per_voice) > 1:
             first_beat = beat_per_voice[0]
             if not all(abs(beat - first_beat) < 0.0001 for beat in beat_per_voice):
-                raise ValueError(f"In bar {slice.bar}, offset {slice.offset:.2f}: Not all voices have the same beat. Beats: {beat_per_voice}")eck if all voices' beats are the same (only in debug mode)
-(beat_per_voice) > 1:
-        # Set the beat position to the first beat value for simplicity.            first_beat = beat_per_voice[0]
-        # Round to get rid of floating point division error. NOTE: this rounding might cause unpredictable bugs?            if not all(abs(beat - first_beat) < 0.0001 for beat in beat_per_voice):
-        slice.beat = round(beat_per_voice[0], 5)set {slice.offset:.2f}: Not all voices have the same beat. Beats: {beat_per_voice}")
+                raise ValueError(f"In bar {cur_slice.bar}, offset {cur_slice.offset:.2f}: Not all voices have the same beat. Beats: {beat_per_voice}")
 
-                    # Set the beat position to the first beat value for simplicity.
-    return salami_slicession error. NOTE: this rounding might cause unpredictable bugs?
-(beat_per_voice[0], 5)
+        # Set the beat position to the first beat value for simplicity.
+        # Round to get rid of floating point division error. NOTE: this rounding might cause unpredictable bugs?
+        cur_slice.beat = round(beat_per_voice[0], 5)
+
+            
+    return salami_slices
+
 
 def validate_all_rules(salami_slices, metadata, cp_rules):
     violations = defaultdict(list)
 
     for i, slice_cur in enumerate(salami_slices):
-        current_kwargs = {ata, cp_rules):
+        current_kwargs = {
             "slice1": slice_cur,
             "slice2": salami_slices[i-1],
             "slice_index": i,
-            "metadata": metadata # TODO: metadata can be an *arg, but doesn't really matter    current_kwargs = {
-        }_cur,
-        # Update violations with the output            "slice2": salami_slices[i-1],
-        slice_violations = cp_rules.validate_all_rules(**current_kwargs)            "slice_index": i,
-        for rule_name, rule_violations in slice_violations.items():            "metadata": metadata # TODO: metadata can be an *arg, but doesn't really matter
+            "metadata": metadata # TODO: metadata can be an *arg, but doesn't really matter
+        }
+        # Update violations with the output
+        slice_violations = cp_rules.validate_all_rules(**current_kwargs)
+        for rule_name, rule_violations in slice_violations.items():
             violations[rule_name].extend(rule_violations)
     
     return dict(violations)
-ce_violations.items():
-le_violations)
-    
+
+
+
 def violations_to_df(violations: Dict[str, List[RuleViolation]], metadata) -> pd.DataFrame:
     violation_counts = feature_counts(violations)
     # Add the composer from metadata (defaulting to "Unknown" if not present)
     composer = metadata.get("COM", "Unknown")
-    violation_counts["composer"] = composerdef violations_to_df(violations: Dict[str, List[RuleViolation]], metadata) -> pd.DataFrame:
-_counts = feature_counts(violations)
-    # Create df (with dict keys as columns), and set composer as last column    # Add the composer from metadata (defaulting to "Unknown" if not present)
+    violation_counts["composer"] = composer
+
+    # Create df (with dict keys as columns), and set composer as last column
     df = pd.DataFrame([violation_counts])
     cols = [col for col in df.columns if col != "composer"] + ["composer"]
     df = df[cols]
-    # Create df (with dict keys as columns), and set composer as last column
-    return dflation_counts])
+
+    return df
 
 def feature_counts(violations: Dict[str, List[RuleViolation]]) -> Dict[str, int]:
     counts = {rule: len(violation_list) for rule, violation_list in violations.items()}
     return counts
 
-if __name__ == "__main__":Violation]]) -> Dict[str, int]:
-    # filepath = os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn")ems()}
+if __name__ == "__main__":
+    # filepath = os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn")
     # filepath = os.path.join("..", "data", "test", "Jos1408-test.krn")
 #     filepath = os.path.join("..", "data", "test", "Rue1024a.krn")
-    filepath = os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")if __name__ == "__main__":
-    , "data", "test", "Jos1408-Miserimini_mei.krn")
-    salami_slices, metadata = parse_kern(filepath))
-    salami_slices, metadata = post_process_salami_slices(salami_slices, metadata)  filepath = os.path.join("..", "data", "test", "Rue1024a.krn")
-    print(salami_slices)h = os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")
-    # print(metadata)
-th)
-    cp_rules = CounterpointRules()    salami_slices, metadata = post_process_salami_slices(salami_slices, metadata)
-    violations = validate_all_rules(salami_slices, metadata, cp_rules)alami_slices)
+    filepath = os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")
     
-    print()
-    pprint(violations)    cp_rules = CounterpointRules()
+    salami_slices, metadata = parse_kern(filepath)
+    salami_slices, metadata = post_process_salami_slices(salami_slices, metadata)
+    print(salami_slices)
+    # print(metadata)
 
-
-
-
-
-
-    print()    display(df.head())    print()    df = violations_to_df(violations, metadata)    violations = validate_all_rules(salami_slices, metadata, cp_rules)
+    cp_rules = CounterpointRules()
+    violations = validate_all_rules(salami_slices, metadata, cp_rules)
     
     print()
     pprint(violations)
