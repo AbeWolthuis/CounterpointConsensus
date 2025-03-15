@@ -525,12 +525,13 @@ def order_voices(salami_slices: List[SalamiSlice], metadata: Dict[str, any]) -> 
     # Sort all other metadata that is given per voice, according to the sorting of voice_order
     metadata['voice_names'] = [metadata['voice_names'][_voice].lower() for _voice in voice_order]
 
-    for time_sig in metadata['time_signatures']:
-        metadata['time_signatures'] = [(time_sig[0], [time_sig[1][voice] for voice in voice_order])]
-
-
-    
-    
+    # Collect a new list of voice-order sorted time signatures
+    reordered_time_signatures = []
+    for barline_tuple, timesigs in metadata['time_signatures']:
+        reordered_time_signatures.append(
+            (barline_tuple, [timesigs[v] for v in voice_order])
+        )
+    metadata['time_signatures'] = reordered_time_signatures    
 
     return salami_slices, metadata
 
@@ -548,14 +549,19 @@ def calculate_offsets(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
         # Set the offset for this slice
         cur_slice.offset = current_offset
         
-        # Calculate the next offset based on this slice's duration
-        # Use the shortest duration as the increment (usually the first voice is sufficient)
-        if cur_slice.notes and any(note and note.note_type in ('note', 'rest') for note in cur_slice.notes):
-            # Find the first valid note/rest duration
-            for note in cur_slice.notes:
-                if note and note.note_type in ('note', 'rest'):
-                    current_offset += note.duration
-                    break
+        # Calculate the next offset based on the shortest duration in this slice
+        min_duration = float('inf')
+        has_valid_note = False
+        
+        for note in cur_slice.notes:
+            if note and note.note_type in ('note', 'rest'):
+                min_duration = min(min_duration, note.duration)
+                has_valid_note = True
+        
+        # Only update the current offset if we found valid notes.
+        # Doesn't update if the slice is a barline or final barline.
+        if has_valid_note:
+            current_offset += min_duration
     
     return salami_slices
 
@@ -567,19 +573,25 @@ def calculate_beat_positions(salami_slices: List[SalamiSlice], metadata) -> List
     # For each salami slice, find the applicable time signature and convert offset to beats
     timesig_index = 0
     current_time_sig_tuple = metadata['time_signatures'][timesig_index]
+
     for cur_slice in salami_slices:
         beat_per_voice = [] # Note: this will be a list with one value, except in debug mode.
 
         # Find the time signature in effect for this bar
         if cur_slice.bar > current_time_sig_tuple[0][1]:
-            # Move to the next time signature
             timesig_index += 1
             current_time_sig_tuple = metadata['time_signatures'][timesig_index]
-        
-        current_time_sig = current_time_sig_tuple[1]
-        if not current_time_sig_tuple or not current_time_sig:
+        # TODO: time sigs can be different; even though the slice will always fall on the same beat
+        numerator, denominator = current_time_sig_tuple[1][0]
+        if not current_time_sig_tuple or not numerator or not denominator:
             raise ValueError(f"No time signature found for bar {cur_slice.bar}")
-            
+
+        beat = 1 + cur_slice.offset / DURATION_MAP[str(denominator)] 
+        # Set the beat position to the first beat value for simplicity.
+        # Round to get rid of floating point division error. NOTE: this rounding might cause unpredictable bugs?
+        cur_slice.beat = round(beat, 5)
+
+        """OLD: 
         for voice_idx, _ in enumerate(cur_slice.notes):                                       
             ''' Convert raw offset to beat position.
             In a time signature like 3/4, one quarter-note spans 0.25 * (4/3) = 0.333 of the bar.
@@ -601,10 +613,8 @@ def calculate_beat_positions(salami_slices: List[SalamiSlice], metadata) -> List
             first_beat = beat_per_voice[0]
             if not all(abs(beat - first_beat) < 0.0001 for beat in beat_per_voice):
                 raise ValueError(f"In bar {cur_slice.bar}, offset {cur_slice.offset:.2f}: Not all voices have the same beat. Beats: {beat_per_voice}")
-
-        # Set the beat position to the first beat value for simplicity.
-        # Round to get rid of floating point division error. NOTE: this rounding might cause unpredictable bugs?
-        cur_slice.beat = round(beat_per_voice[0], 5)
+        """
+        
 
             
     return salami_slices
@@ -654,7 +664,7 @@ if __name__ == "__main__":
     
     salami_slices, metadata = parse_kern(filepath)
     salami_slices, metadata = post_process_salami_slices(salami_slices, metadata)
-    print(salami_slices)
+    print(salami_slices[0:10])
     # print(metadata)
 
     cp_rules = CounterpointRules()

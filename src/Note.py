@@ -51,7 +51,7 @@ class SalamiSlice:
     
     def __repr__(self):
         # Show both offset and beat in the representation
-        offset_str = f"offset={self.offset:.2f}, beat={self.beat}, "
+        offset_str = f"offset={self.offset:.2f}, beat={self.beat}, bar={self.bar}, "
         notes_str = "[" + ", ".join([str(note) for note in self.notes]) + "]"
         return f"{offset_str}{notes_str}\n"
 
