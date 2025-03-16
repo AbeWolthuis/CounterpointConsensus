@@ -69,12 +69,14 @@ class Note():
     def __init__(self, 
                  midi_pitch: int = -1,
                  duration: float = -1,
+                 bar: int = -1,
                  note_type: str = None,
                  new_occurence: bool = True,
                  is_triplet: bool = False) -> None:
         
         self.midi_pitch = midi_pitch
         self.duration = duration
+        self.bar = bar
         self.note_type = note_type
         self.new_occurrence = new_occurence
         self.is_triplet = is_triplet
@@ -99,6 +101,14 @@ class Note():
         if self.midi_pitch == -1:
             return None
         return self.midi_to_pitch[self.midi_pitch]
+    
+    @property
+    def compact_summary(self) -> str:
+        """Get a compact summary of the note."""
+        if self.note_type == 'note':
+            return f"{self.note_name}-{self.duration}"
+        else:
+            return f"{self.note_type}-{self.duration}"
     
     # Checks to make sure the note is set
     def check(self):
