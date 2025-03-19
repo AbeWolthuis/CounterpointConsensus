@@ -7,7 +7,10 @@ from typing import List, Dict, Tuple
 import copy
 import pandas as pd
 
+import cProfile, pstats
+
 from constants import DURATION_MAP, TRIPLET_DURATION_MAP, TIME_SIGNATURE_NORMALIZATION_MAP ,PITCH_TO_MIDI, MIDI_TO_PITCH 
+from constants import FLOAT_TRUNCATION_DIGITS, BEAT_GRID_DIVISIONS
 from counterpoint_rules import RuleViolation
 from data_preparation import violations_to_df
 
@@ -17,16 +20,16 @@ import Note
 import counterpoint_rules
 importlib.reload(Note)
 importlib.reload(counterpoint_rules)
+
 from Note import Note, SalamiSlice
 from counterpoint_rules import CounterpointRules
 
-
-
-
     
-DEBUG = False
-DEBUG2 = True
+DEBUG = True
+DEBUG2 = False
 INFINITY_BAR = 1e6
+
+
 
 metadata_template = {
     # JRP sepcified metadata
@@ -189,20 +192,26 @@ def parse_note_section(note_section: List[str], metadata) -> List:
     accidental_tracker = {'a': 0, 'b': 0, 'c': 0, 'd': 0, 'e': 0, 'f': 0, 'g': 0} 
     current_bar = 1  # Start with bar 1
     
+    # A per-voice tie tracker: one bool per voice
+    tie_open_flags = [False] * int(metadata['voices'])
+
+
     for line_idx, line in enumerate(note_section):
         new_salami_slice = SalamiSlice(
             num_voices=int(metadata['voices']),
             bar = current_bar
-        )
-        barline_updated_flag = False
-        
+        )        
+
         tokens = line.split()
         # Check if we're trying to add too many/few notes
         if len(tokens) != metadata['voices'] and not line.startswith('='):
             raise ValueError(f"Line has {len(tokens)} tokens but metadata specifies {metadata['voices']} voices: '{line.strip()}'")
-        
+
         for token_idx, token in enumerate(tokens):
-            new_note, accidental_tracker, current_bar = kern_token_to_note(token, accidental_tracker, current_bar)
+            new_note, accidental_tracker, tie_open_flags, current_bar = kern_token_to_note(
+                token, accidental_tracker, tie_open_flags, current_bar=current_bar, token_idx=token_idx
+                )
+            # Rounding notes is done in calculate_beat_positions() (TODO: should we also snap durations?).
             new_salami_slice.add_note(note=new_note, voice=token_idx)
             
 
@@ -223,7 +232,9 @@ def parse_note_section(note_section: List[str], metadata) -> List:
 
 def kern_token_to_note(
         kern_token: str,
-        accidental_tracker: dict,
+        accidental_tracker: Dict,
+        tie_open_flags: List[bool],
+        token_idx: int,
         current_bar = -1,
         include_editorial_accidentals = True,
     ) -> Tuple[Note, Dict, int]:
@@ -340,6 +351,18 @@ def kern_token_to_note(
                 
                 # Skip to the end of the token
                 i += len(kern_token[i:]) - 1
+            elif c == '[':
+                # Start of a tie
+                if tie_open_flags[token_idx] == True:
+                    raise ValueError(f"Found unexpected start of tie (char '{c}') in token '{kern_token}', at index '{token_idx}' in some line'")
+                else:
+                    tie_open_flags[token_idx] = True
+            elif c == ']':
+                # End of a tie
+                if tie_open_flags[token_idx] == False:
+                    raise ValueError(f"Found unexpected end of tie (char '{c}') in token '{kern_token}', at index '{token_idx}' in some line'")
+                else:
+                    tie_open_flags[token_idx] = False
             else:
                 raise ValueError(f"Could not parse character '{c}' in token '{kern_token}', at index '{i}'")
         except Exception as e:
@@ -349,12 +372,15 @@ def kern_token_to_note(
         i += 1
     #endwhile
 
+    # If tie_open_flags[voice_idx] is True, we mark this note as tied
+    new_note.is_tied = tie_open_flags[token_idx]
+
     # Error checking
     if new_note.duration is None:
         raise ValueError(f"Could not find duration for token '{kern_token}'")
 
     # TODO: return the accidental tracker, because it is relevant for the entire measure
-    return new_note, accidental_tracker, current_bar
+    return new_note, accidental_tracker, tie_open_flags, current_bar
 
 
 """Helper functions to parse all the different kinds of lines."""
@@ -552,10 +578,13 @@ def calculate_offsets(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
         if cur_slice.bar != current_bar:
             if DEBUG2: print('New bar:',leftover_durations)
 
-            # Sanity check: all voices must have leftover durations of <= 0
-            if any(duration > 0 for duration in leftover_durations):
-                print('\n', salami_slices[0:10], '\n')
-                raise ValueError(f"Bar {cur_slice.bar} has leftover durations: {leftover_durations}")
+
+            # Sanity check: all voices must have leftover durations <= 0 + EPSILON
+            epsilon = 1e-5
+            if any(duration > epsilon for duration in leftover_durations):
+                # print('\n', salami_slices[0:10], '\n')
+                #raise ValueError(f"Bar {cur_slice.bar} has leftover durations: {leftover_durations}")
+                pass
             current_bar = cur_slice.bar
             current_offset = 0.0
             # The new leftover durations are the durations of the first slice of the new bar
@@ -573,12 +602,23 @@ def calculate_offsets(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
         # After that amount of time, the next slice will take place.
         time_step = min(leftover_durations)
         if DEBUG2:
-            min_duration_voice = leftover_durations.index(time_step); min_duration_note = cur_slice.notes[min_duration_voice]
+            # Find all indices with the minimum duration (to detect ties)
+            min_indices = [i for i, d in enumerate(leftover_durations) if d == time_step]
+            is_tie = len(min_indices) > 1
+            
+            # Always use the first index as required
+            min_duration_voice = min_indices[0]
+            min_duration_note = cur_slice.notes[min_duration_voice]
+            
+            # Add tie information to debug output
+            tie_message = f"tie between voices {', '.join(map(str, min_indices))}, using voice {min_duration_voice}" if is_tie else f"in voice {min_duration_voice}"
+            
             slice_notes = ', '.join([note.compact_summary for note in cur_slice.notes if note.note_type == 'note'])
-            print(f"Slice {slice_idx} ({slice_notes}) at bar {cur_slice.bar} has offset {cur_slice.offset} and time step {time_step} based on {min_duration_note.compact_summary} in voice {min_duration_voice}")
+            print(f"Slice {slice_idx} ({slice_notes}) at bar {cur_slice.bar} has offset {cur_slice.offset} and time step {time_step} {tie_message} based on {min_duration_note.compact_summary}")
             print('\t',leftover_durations)
             triplet_notes = [note.is_triplet for note in cur_slice.notes]
-            print(f"Triplet notes: {triplet_notes}")
+            if any(triplet_notes):
+                print(f"Triplet notes: {triplet_notes}")
 
         # Go forwards in time by the minimum duration of the notes in this slice
         current_offset += time_step 
@@ -587,7 +627,7 @@ def calculate_offsets(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
         a = 1
     return salami_slices
 
-def _calculate_offsets(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
+def _DEPRECATED_calculate_offsets(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
     """ Calculate the offset of each slice from the beginning of its bar """
     current_offset = 0.0
     current_bar = 1  # Start with bar 1
@@ -625,15 +665,35 @@ def calculate_beat_positions(salami_slices: List[SalamiSlice], metadata) -> List
     timesig_index = 0
     current_time_sig_tuple = metadata['time_signatures'][timesig_index]
 
+    # We'll move through slices bar by bar
     for cur_slice in salami_slices:
-        # beat_per_voice = [] # Note: this will be a list with one value, except in debug mode.
 
-        # Find the time signature in effect for this bar
+        # If we've passed the old time signature's bar range, move on to the next time sig
         # TODO: time sigs can be different; even though the slice will always fall on the same beat
         if cur_slice.bar > current_time_sig_tuple[0][1]:
             timesig_index += 1
             current_time_sig_tuple = metadata['time_signatures'][timesig_index]
+
+        # Take the first time signature arbitrarily 
         numerator, denominator = current_time_sig_tuple[1][0]
+
+        # 1) Figure out measure length in "whole-note" time
+        #    E.g. for 4/4, denominator=4 => measure_length=1.0 from DURATION_MAP
+        if str(denominator) not in DURATION_MAP:
+            raise ValueError(f"Unsupported denominator {denominator}")
+        measure_length = DURATION_MAP[str(denominator)] * numerator
+
+         # 2) Get how many subdivisions we want for the entire measure
+        subdivisions = get_subdivisions_for_timesig(numerator, denominator, division_per_beat = BEAT_GRID_DIVISIONS)
+    
+        # 3) Snap the offset
+        snapped_offset = snap_offset_to_grid(cur_slice.offset, measure_length, subdivisions)
+        cur_slice.offset = snapped_offset
+
+        # 4) Also snap the note durations in the slices. Note, 
+        for note in cur_slice.notes:
+            if note.duration:
+                note.duration = snap_offset_to_grid(note.duration, measure_length, subdivisions)
 
         if not current_time_sig_tuple or not numerator or not denominator:
             raise ValueError(f"No time signature found for bar {cur_slice.bar}")
@@ -641,14 +701,26 @@ def calculate_beat_positions(salami_slices: List[SalamiSlice], metadata) -> List
         # Beat calculation magic
         beat = 1 + cur_slice.offset / DURATION_MAP[str(denominator)] 
         # Round to get rid of floating point division error. NOTE: this rounding might cause unpredictable bugs?
-        cur_slice.beat = round(beat, 5)
-
+        cur_slice.beat = cur_slice.truncate_float_as_float(beat, FLOAT_TRUNCATION_DIGITS)
 
             
     return salami_slices
 
+'''Other helper functions'''
 
-def validate_all_rules(salami_slices, metadata, cp_rules):
+def snap_offset_to_grid(offset: float, measure_length: float, subdivisions: int) -> float:
+    """
+    Snap 'offset' to the nearest of 'subdivisions' equally spaced points from 0 to measure_length.
+    """
+    step = measure_length / subdivisions
+    index = round(offset / step)
+    return index * step
+
+def get_subdivisions_for_timesig(numerator: int, denominator: int, division_per_beat = BEAT_GRID_DIVISIONS) -> int:
+    # TODO: customize for certain time signatures
+    return numerator * division_per_beat
+
+def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRules):
     violations = defaultdict(list)
 
     for i, slice_cur in enumerate(salami_slices):
@@ -667,36 +739,26 @@ def validate_all_rules(salami_slices, metadata, cp_rules):
 
 
 
-def violations_to_df(violations: Dict[str, List[RuleViolation]], metadata) -> pd.DataFrame:
-    violation_counts = feature_counts(violations)
-    # Add the composer from metadata (defaulting to "Unknown" if not present)
-    composer = metadata.get("COM", "Unknown")
-    violation_counts["composer"] = composer
-
-    # Create df (with dict keys as columns), and set composer as last column
-    df = pd.DataFrame([violation_counts])
-    cols = [col for col in df.columns if col != "composer"] + ["composer"]
-    df = df[cols]
-
-    return df
-
-def feature_counts(violations: Dict[str, List[RuleViolation]]) -> Dict[str, int]:
-    counts = {rule: len(violation_list) for rule, violation_list in violations.items()}
-    return counts
-
 if __name__ == "__main__":
     # filepath = os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn")
     # filepath = os.path.join("..", "data", "test", "Jos1408-test.krn")
     filepath = os.path.join("..", "data", "test", "Rue1024a.krn")
     # filepath = os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")
+
+    # profiler = cProfile.Profile()
+    # profiler.enable()
     
     salami_slices, metadata = parse_kern(filepath)
     salami_slices, metadata = post_process_salami_slices(salami_slices, metadata)
-    print(salami_slices)
+    print(salami_slices[180:])
     # print(metadata)
 
     cp_rules = CounterpointRules()
     violations = validate_all_rules(salami_slices, metadata, cp_rules)
+
+    # profiler.disable()
+    # stats = pstats.Stats(profiler).sort_stats(pstats.SortKey.TIME)
+    # stats.print_stats()
     
     print()
     pprint(violations)
@@ -704,3 +766,5 @@ if __name__ == "__main__":
 
     print()
     #display(df.head()); print()
+
+

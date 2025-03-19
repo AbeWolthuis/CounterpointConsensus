@@ -1,4 +1,5 @@
-
+FLOAT_TRUNCATION_DIGITS = 5
+BEAT_GRID_DIVISIONS = 48
 
 # Duration mapping
 DURATION_MAP = {
@@ -11,8 +12,8 @@ DURATION_MAP = {
     '32': 0.03125, 
 }
 TRIPLET_DURATION_MAP = {
-    '3': 0.333,
-    '6': 0.166,
+    '3': 0.3333333, # 7 digits of 3
+    '6': 0.1666666, # 6 digits of 6
 }
 TIME_SIGNATURE_NORMALIZATION_MAP = {
     1: 4,
