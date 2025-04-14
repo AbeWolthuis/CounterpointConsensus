@@ -48,6 +48,7 @@ metadata_template = {
     
     # Metadata we add ourselves
     'section_ends': [], # list of the barnumbers of the last bars of each section 
+    'total_bars': 0, # total number of bars in the piece (length of piece)
 }
 metadata_linestarts_map = {
     '!!!COM': 'COM',
@@ -99,6 +100,10 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                     a = line.split(':')[0][0:6]
                     metadata_key, metadata_value = metadata_linestarts_map[a], line.split(':')[1].strip()
                     metadata[metadata_key] = metadata_value
+                elif line.startswith('!!section'):
+                    # In Rue1024, the new barline count is given before the new section starts. So, no need to add bar_count+1.
+
+                    metadata['section_ends'].append(bar_count)
 
             elif line.startswith('*'):
                 if line.startswith('*I'):
@@ -216,12 +221,13 @@ def parse_note_section(note_section: List[str], metadata) -> List:
             
 
             if new_note.note_type == 'final_barline':
-                # Check if there are remaining lines with notes after this one.
+                metadata['total_bars'] = current_bar
+
+                # Check if there are remaining lines with notes or metadata after this one.
+                # That should not be possible, so raise an error if so.
                 remaining_lines = note_section[line_idx+1:]
                 for remaining_idx, remaining_line in enumerate(remaining_lines):
-                    if (not remaining_line.strip() or 
-                        remaining_line.startswith('!') or 
-                        remaining_line.startswith('*')):
+                    if (not remaining_line.strip() or remaining_line.startswith('!') or remaining_line.startswith('*')):
                         raise ValueError(f"Found unexpected line '{remaining_line}' after final barline.")
             elif new_note is None:
                 raise ValueError(f"Token '{token}' in line '{line}' lead to new_note being None.")
@@ -720,7 +726,8 @@ def get_subdivisions_for_timesig(numerator: int, denominator: int, division_per_
     # TODO: customize for certain time signatures
     return numerator * division_per_beat
 
-def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRules):
+def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRules,
+                       only_validate_rules: list = None):
     violations = defaultdict(list)
 
     for i, slice_cur in enumerate(salami_slices):
@@ -728,7 +735,8 @@ def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRules):
             "slice1": slice_cur,
             "slice2": salami_slices[i-1],
             "slice_index": i,
-            "metadata": metadata # TODO: metadata can be an *arg, but doesn't really matter
+            "metadata": metadata, # TODO: metadata can be an *arg, but doesn't really matter
+            "only_validate_rules": only_validate_rules
         }
         # Update violations with the output
         slice_violations = cp_rules.validate_all_rules(**current_kwargs)
@@ -750,11 +758,12 @@ if __name__ == "__main__":
     
     salami_slices, metadata = parse_kern(filepath)
     salami_slices, metadata = post_process_salami_slices(salami_slices, metadata)
-    print(salami_slices[180:])
-    # print(metadata)
+    #print(salami_slices[180:])
+    pprint(metadata)
 
     cp_rules = CounterpointRules()
-    violations = validate_all_rules(salami_slices, metadata, cp_rules)
+    only_validate_rules = ['no_parallel_fiths', 'use_longa_only_at_endings']
+    violations = validate_all_rules(salami_slices, metadata, cp_rules, only_validate_rules)
 
     # profiler.disable()
     # stats = pstats.Stats(profiler).sort_stats(pstats.SortKey.TIME)
@@ -765,6 +774,6 @@ if __name__ == "__main__":
     df = violations_to_df(violations, metadata)
 
     print()
-    #display(df.head()); print()
+    display(df.head()); print()
 
 

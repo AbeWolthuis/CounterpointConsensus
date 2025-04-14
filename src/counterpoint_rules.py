@@ -9,7 +9,7 @@ from constants import DURATION_MAP, PITCH_TO_MIDI, MIDI_TO_PITCH
 DEBUG = True
 
 class RuleViolation:
-    def __init__(self, rule_name: str, slice_index: int, bar: int,
+    def __init__(self, rule_name: str, rul_idx: int, slice_index: int, bar: int,
                  voice_indices: Union[Tuple, str] = None, voice_names: Union[Tuple, str] = None,
                  note_names: Union[Tuple, str] = None, beat: float = None) -> None:
         self.rule_name = rule_name
@@ -49,6 +49,9 @@ class RuleViolation:
         base_str += ")"
 
         return base_str
+    
+
+
 
 class CounterpointRules:
     allowed_ranges_modern_names = {
@@ -73,19 +76,52 @@ class CounterpointRules:
     }
 
 
-
     def validate_all_rules(self, *args, **kwargs) -> Dict[str, List[RuleViolation]]:
+        only_validate_rules = kwargs['only_validate_rules'] if 'only_validate_rules' in kwargs else None
+        
         violations = defaultdict(list)
         for name, func in inspect.getmembers(CounterpointRules, predicate=inspect.isfunction):
             # if DEBUG: print(name)
             if name != "validate_all_rules" and not name.startswith("__"):
-                result = func(name, **kwargs)
-                violations[name].extend(result)
+                # If only_validate_rules is provided, check if the rule is in the list
+                if (not only_validate_rules) or (name in only_validate_rules):
+                    result = func(self, name, **kwargs)
+                    violations[name].extend(result)
         return dict(violations)
+
+
+    """
+    %%% Rules for any amount of voices %%%
+    """
+    @staticmethod
+    def use_longa_only_at_endings(self, rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
+        """
+        Check that the last slice of each voice has a longa or brevis note.
+        """
+        rule_id = 1
+
+
+        cur_slice = kwargs["slice1"]
+        cur_slice_index = kwargs["slice_index"]
+        metadata = kwargs["metadata"]
+
+        violations = []
+        for voice_number, note in enumerate(cur_slice.notes):
+            if note and note.note_type == 'note' and note.midi_pitch != -1:
+                    # Check if note is longa or brevis
+                    if note.duration in [2.0]:
+                        if note.new_occurrence:
+                            # Check if note is the last note in the section, or piece.
+                            if not ( (cur_slice.bar+1 in metadata['section_ends']) or (cur_slice.bar == metadata['total_bars']) ):
+
+                                # Include note name for violation
+                                violations.append(RuleViolation(rule_name=rulename, rule_id=rule_id, slice_index=cur_slice_index, bar=cur_slice.bar, voice_indices=voice_number, note_names=note.note_name))
+                    
+        return violations
 
     
     @staticmethod
-    def no_parallel_fiths(name, **kwargs) -> Dict[str, List[RuleViolation]]:
+    def no_parallel_fiths(self, name, **kwargs) -> Dict[str, List[RuleViolation]]:
         slice_cur = kwargs["slice1"]
         slice_prev = kwargs["slice2"]
         slice_index = kwargs["slice_index"]
@@ -116,8 +152,9 @@ class CounterpointRules:
         return violations
     
 
+
     @staticmethod
-    def __has_valid_range__(name, **kwargs) -> Dict[str, List[RuleViolation]]:
+    def has_valid_range__(self, name, **kwargs) -> Dict[str, List[RuleViolation]]:
         """
         Check that each note in the current slice is within its allowed MIDI range.
         
