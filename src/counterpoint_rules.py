@@ -121,7 +121,7 @@ class CounterpointRules:
 
     
     @staticmethod
-    def no_parallel_fiths(self, name, **kwargs) -> Dict[str, List[RuleViolation]]:
+    def no_parallel_fiths(name, **kwargs) -> Dict[str, List[RuleViolation]]:
         slice_cur = kwargs["slice1"]
         slice_prev = kwargs["slice2"]
         slice_index = kwargs["slice_index"]
