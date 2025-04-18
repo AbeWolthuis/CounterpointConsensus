@@ -9,10 +9,11 @@ from constants import DURATION_MAP, PITCH_TO_MIDI, MIDI_TO_PITCH
 DEBUG = True
 
 class RuleViolation:
-    def __init__(self, rule_name: str, rul_idx: int, slice_index: int, bar: int,
+    def __init__(self, rule_name: str, rule_id: int, slice_index: int, bar: int,
                  voice_indices: Union[Tuple, str] = None, voice_names: Union[Tuple, str] = None,
                  note_names: Union[Tuple, str] = None, beat: float = None) -> None:
         self.rule_name = rule_name
+        self.rule_id = rule_id
         self.slice_index = slice_index
         self.bar = bar
 
@@ -85,7 +86,7 @@ class CounterpointRules:
             if name != "validate_all_rules" and not name.startswith("__"):
                 # If only_validate_rules is provided, check if the rule is in the list
                 if (not only_validate_rules) or (name in only_validate_rules):
-                    result = func(self, name, **kwargs)
+                    result = func(name, **kwargs)
                     violations[name].extend(result)
         return dict(violations)
 
@@ -93,8 +94,12 @@ class CounterpointRules:
     """
     %%% Rules for any amount of voices %%%
     """
+
+    """
+    % Rhytm and meter %
+    """
     @staticmethod
-    def use_longa_only_at_endings(self, rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
+    def longa_only_at_endings(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
         """
         Check that the last slice of each voice has a longa or brevis note.
         """
@@ -112,16 +117,77 @@ class CounterpointRules:
                     if note.duration in [2.0]:
                         if note.new_occurrence:
                             # Check if note is the last note in the section, or piece.
-                            if not ( (cur_slice.bar+1 in metadata['section_ends']) or (cur_slice.bar == metadata['total_bars']) ):
+                            # We add one to the current bar, to check if the bar after is the start of the new section.
+                            if not ( (cur_slice.bar+1 in metadata['section_starts']) or (cur_slice.bar == metadata['total_bars']) ):
 
                                 # Include note name for violation
                                 violations.append(RuleViolation(rule_name=rulename, rule_id=rule_id, slice_index=cur_slice_index, bar=cur_slice.bar, voice_indices=voice_number, note_names=note.note_name))
                     
         return violations
 
-    
+    @staticmethod
+    def leap_too_large(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
+        """
+        Check for large leaps bigger than minor sixth. An octave jump is allowed. 
+        """
+        rule_id = 23
+
+        cur_slice_idx = kwargs['slice_index']
+        salami_slices = kwargs['salami_slices']
+        metadata = kwargs['metadata']
+        cur_slice = salami_slices[cur_slice_idx]
+
+        violations = []
+
+        for voice_number, note in enumerate(cur_slice.notes):
+            if note and note.note_type == 'note' and note.new_occurrence:
+                # Look back for the previous note in this voice, but do not cross a section ending
+                prev_note = None
+                prev_idx = cur_slice_idx - 1
+                while prev_idx >= 0:
+                    prev_slice = salami_slices[prev_idx]
+                    # If we hit (cross into the bar of) a section ending, stop searching
+                    if prev_slice.bar in metadata['section_ends'] and prev_slice.bar != cur_slice.bar:
+                        break
+                    candidate = prev_slice.notes[voice_number]
+                    if candidate.note_type == 'note':
+                        prev_note = candidate
+                        break
+                    prev_idx -= 1
+
+                # If we found a previous note, check the leap.
+                if prev_note:
+                    interval = abs(note.midi_pitch - prev_note.midi_pitch)
+                    if interval in (9, 10, 11) or interval >= 13:
+                        violations.append(RuleViolation(
+                            rule_name=rulename,
+                            rule_id=rule_id,
+                            slice_index=cur_slice_idx,
+                            bar=cur_slice.bar,
+                            voice_indices=voice_number,
+                            note_names=(prev_note.note_name, note.note_name)
+                        ))
+
+
+
+                # Now prev_note is either None or the previous note in this voice (not crossing a section)
+                # ... (your leap checking logic goes here) ...
+
+        return violations
+
+    """
+    % Melody %
+    """
+
+
+
+
+
     @staticmethod
     def no_parallel_fiths(name, **kwargs) -> Dict[str, List[RuleViolation]]:
+        
+        rule_id = 1000
+
         slice_cur = kwargs["slice1"]
         slice_prev = kwargs["slice2"]
         slice_index = kwargs["slice_index"]
@@ -143,6 +209,7 @@ class CounterpointRules:
                         
                         violations.append(RuleViolation(
                             rule_name=name, 
+                            rule_id=rule_id,
                             slice_index=slice_index, 
                             bar=slice_cur.bar,
                             voice_indices=voice_pair,
@@ -154,7 +221,7 @@ class CounterpointRules:
 
 
     @staticmethod
-    def has_valid_range__(self, name, **kwargs) -> Dict[str, List[RuleViolation]]:
+    def has_valid_range__(name, **kwargs) -> Dict[str, List[RuleViolation]]:
         """
         Check that each note in the current slice is within its allowed MIDI range.
         

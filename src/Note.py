@@ -111,7 +111,6 @@ class Note(FloatTruncator):
     _POSSIBLE_TYPES = ('note', 'rest', 'period', 'barline', 'final_barline')
     midi_to_pitch = MIDI_TO_PITCH
     pitch_to_midi = PITCH_TO_MIDI
-    # __slots__ = ('midi_pitch', 'duration', 'note_type', 'new_occurrence')
 
     def __init__(self, 
                 # Pitch

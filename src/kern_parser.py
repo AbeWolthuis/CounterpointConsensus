@@ -47,8 +47,9 @@ metadata_template = {
     'time_signatures': [], # list of time signatures for each voice at each change point
     
     # Metadata we add ourselves
-    'section_ends': [], # list of the barnumbers of the last bars of each section 
-    'total_bars': 0, # total number of bars in the piece (length of piece)
+    'section_starts': [], # list of the barnumbers of the first bars of each section 
+    'section_ends': [],   # list of the barnumbers of the last bars of each section
+    'total_bars': 0,      # total number of bars in the piece (length of piece)
 }
 metadata_linestarts_map = {
     '!!!COM': 'COM',
@@ -70,8 +71,6 @@ ignored_tokens = {
     '\\' : 'down-stem',
     '/' : 'up-stem',
     ';' : 'fermata',
-    '[' : 'start_slur', # TODO: implement
-    ']' : 'end_slur' # TODO: implement
 }
 ignored_line_tokens = {}
 
@@ -86,14 +85,12 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
     with open(kern_filepath, 'r') as f:
         metadata_flag = True
         bar_count = 0 
-        last_metadata_update_bar = 0
+        last_section_end = None  # Track the last section's end
 
         note_section = []
         lines = f.readlines()
 
-        # Parse metadata, and gather the section of the file containing notes
         for line_idx, line in enumerate(lines):
-            # if DEBUG: print(line[0:6]) 
             if line.startswith('!'):
                 if line[0:6] in metadata_linestarts_map.keys():
                     # Splt '!!!jrpid: xxx' to 'jrpid',' xxx'
@@ -101,9 +98,12 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                     metadata_key, metadata_value = metadata_linestarts_map[a], line.split(':')[1].strip()
                     metadata[metadata_key] = metadata_value
                 elif line.startswith('!!section'):
-                    # In Rue1024, the new barline count is given before the new section starts. So, no need to add bar_count+1.
-
-                    metadata['section_ends'].append(bar_count)
+                    # Record the end of the previous section (if not the very first section)
+                    if metadata['section_starts']:
+                        # The previous section ends at the bar before this section starts
+                        metadata['section_ends'].append(bar_count - 1)
+                    # Record the start of the new section
+                    metadata['section_starts'].append(bar_count)
 
             elif line.startswith('*'):
                 if line.startswith('*I'):
@@ -195,6 +195,7 @@ def parse_note_section(note_section: List[str], metadata) -> List:
     """ Parse the notes into salami slices """
     salami_slices = []
     accidental_tracker = {'a': 0, 'b': 0, 'c': 0, 'd': 0, 'e': 0, 'f': 0, 'g': 0} 
+    accidental_trackers = [dict(a=0, b=0, c=0, d=0, e=0, f=0, g=0) for _ in range(metadata['voices'])]
     current_bar = 1  # Start with bar 1
     
     # A per-voice tie tracker: one bool per voice
@@ -213,13 +214,31 @@ def parse_note_section(note_section: List[str], metadata) -> List:
             raise ValueError(f"Line has {len(tokens)} tokens but metadata specifies {metadata['voices']} voices: '{line.strip()}'")
 
         for token_idx, token in enumerate(tokens):
-            new_note, accidental_tracker, tie_open_flags, current_bar = kern_token_to_note(
-                token, accidental_tracker, tie_open_flags, current_bar=current_bar, token_idx=token_idx
+            new_note, accidental_trackers, tie_open_flags, current_bar = kern_token_to_note(
+                token, accidental_trackers, tie_open_flags, current_bar=current_bar, token_idx=token_idx
                 )
+            
+            # Set ties, based on the prevoius note 
+            prev_note = salami_slices[-1].notes[token_idx] if salami_slices else None
+            if prev_note:
+                # For sure, any note with the tie-open flag is tied.
+                if tie_open_flags[token_idx]: # and (prev_note.is_tied) and (not prev_note.is_tie_end) and (prev_note.midi_pitch == new_note.midi_pitch):
+                    new_note.is_tied = True
+                # This detects the start of a new tie (this note is tied, previous one is not, or it is tied but also the tie-end)
+                if (tie_open_flags[token_idx]) and ((not prev_note.is_tied) or (prev_note.is_tie_end)):
+                    new_note.is_tie_start = True
+                # This detects the end of a tie (this note is not tied, previous is).
+                # Note that we set the is_tied flag to True, because it is still part of the tie.
+                if (not tie_open_flags[token_idx]) and (prev_note.is_tied):
+                    new_note.is_tie_end = True
+                    new_note.is_tied = True
+
             # Rounding notes is done in calculate_beat_positions() (TODO: should we also snap durations?).
             new_salami_slice.add_note(note=new_note, voice=token_idx)
             
-
+            if new_note.note_type == 'barline':
+                # Reset accidental trackers
+                accidental_trackers = [dict(a=0, b=0, c=0, d=0, e=0, f=0, g=0) for _ in range(metadata['voices'])]
             if new_note.note_type == 'final_barline':
                 metadata['total_bars'] = current_bar
 
@@ -238,12 +257,12 @@ def parse_note_section(note_section: List[str], metadata) -> List:
 
 def kern_token_to_note(
         kern_token: str,
-        accidental_tracker: Dict,
+        accidental_trackers: dict,
         tie_open_flags: List[bool],
         token_idx: int,
         current_bar = -1,
         include_editorial_accidentals = True,
-    ) -> Tuple[Note, Dict, int]:
+    ) -> Tuple[Note, dict, list, int]:
     
     new_note = Note()
 
@@ -302,10 +321,10 @@ def kern_token_to_note(
                         accidental_token_len += 1
 
                     # Store which note the accidental applies to. E.g., the sharp on 'CC#' is stored under 'c':1 in the accidental_tracker.
-                    accidental_tracker[pitch_token[0].lower()] = accidentals[accidental_token]
+                    accidental_trackers[token_idx][pitch_token[0].lower()] = accidentals[accidental_token]
 
                 ''' Apply the accidental. If it is not set, it is 0 (by default). '''  
-                new_note.midi_pitch += accidental_tracker[pitch_token[0].lower()]
+                new_note.midi_pitch += accidental_trackers[token_idx][pitch_token[0].lower()]
 
                 ''' Handle editorial accidentals. '''
                 # By default, we include editorial accidentals, and thus skip the editorial token "i".
@@ -360,6 +379,7 @@ def kern_token_to_note(
             elif c == '[':
                 # Start of a tie
                 if tie_open_flags[token_idx] == True:
+                    a = 1
                     raise ValueError(f"Found unexpected start of tie (char '{c}') in token '{kern_token}', at index '{token_idx}' in some line'")
                 else:
                     tie_open_flags[token_idx] = True
@@ -378,15 +398,12 @@ def kern_token_to_note(
         i += 1
     #endwhile
 
-    # If tie_open_flags[voice_idx] is True, we mark this note as tied
-    new_note.is_tied = tie_open_flags[token_idx]
-
     # Error checking
     if new_note.duration is None:
         raise ValueError(f"Could not find duration for token '{kern_token}'")
 
     # TODO: return the accidental tracker, because it is relevant for the entire measure
-    return new_note, accidental_tracker, tie_open_flags, current_bar
+    return new_note, accidental_trackers, tie_open_flags, current_bar
 
 
 """Helper functions to parse all the different kinds of lines."""
@@ -452,8 +469,8 @@ def parse_timesig(line: str, metadata: dict, bar_count: int) -> dict:
     metadata['time_signatures'].append((barline_tuple, time_signatures))
     
     if DEBUG:
-            print(f"Parsed time signatures at bar {bar_count}: {time_signatures}")
-    
+            # print(f"Parsed time signatures at bar {bar_count}: {time_signatures}")
+            pass
     return metadata
 
 def parse_keysig(line: str, metadata: dict, bar_count: int, line_idx: int) -> dict:
@@ -712,6 +729,11 @@ def calculate_beat_positions(salami_slices: List[SalamiSlice], metadata) -> List
             
     return salami_slices
 
+def link_salami_slices(salami_slices: List[SalamiSlice], metadata) -> List[SalamiSlice]:
+    """ Link the salami slices together, based on next slice with a new occurence. """
+
+    return salami_slices
+
 '''Other helper functions'''
 
 def snap_offset_to_grid(offset: float, measure_length: float, subdivisions: int) -> float:
@@ -735,6 +757,7 @@ def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRules,
             "slice1": slice_cur,
             "slice2": salami_slices[i-1],
             "slice_index": i,
+            "salami_slices": salami_slices,
             "metadata": metadata, # TODO: metadata can be an *arg, but doesn't really matter
             "only_validate_rules": only_validate_rules
         }
@@ -758,11 +781,15 @@ if __name__ == "__main__":
     
     salami_slices, metadata = parse_kern(filepath)
     salami_slices, metadata = post_process_salami_slices(salami_slices, metadata)
-    #print(salami_slices[180:])
-    pprint(metadata)
+    # print those slices with a tied note in it
+    print('\nNotes with ties:\n')
+    for sslice in salami_slices:
+        if any(note.is_tied for note in sslice.notes):
+            print(sslice)
+    #pprint(metadata)
 
     cp_rules = CounterpointRules()
-    only_validate_rules = ['no_parallel_fiths', 'use_longa_only_at_endings']
+    only_validate_rules = ['no_parallel_fiths', 'use_longa_only_at_endings', 'leap_too_large']
     violations = validate_all_rules(salami_slices, metadata, cp_rules, only_validate_rules)
 
     # profiler.disable()
