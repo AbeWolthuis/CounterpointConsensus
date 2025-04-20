@@ -41,6 +41,10 @@ class ConsistencyChecker:
         self.placeholder_files = []  # Track placeholder files
         self.consistency_issues = defaultdict(list)
         
+        # New tracking for valid and invalid files
+        self.critical_failures = {}  # Dictionary mapping files to their critical failures
+        self.valid_files = set()     # Set of files that pass all critical checks
+        
     def find_all_composers(self):
         """Find all composer directories following the pattern."""
         composer_dirs = []
@@ -120,7 +124,7 @@ class ConsistencyChecker:
     
     '''Checks'''
 
-    def check_file_naming_convention(self, files):
+    def check_file_naming_convention(self, files, file_failures=None):
         """Check if file names follow expected convention."""
         for file_path in files:
             filename = os.path.basename(file_path)
@@ -130,9 +134,11 @@ class ConsistencyChecker:
                 self.consistency_issues["file_naming"].append(
                     f"File doesn't match naming pattern: {filename}"
                 )
+                if file_failures is not None:
+                    file_failures[file_path].append("file_naming")
                 continue
                 
-            composer_code = match.group(1).upper()  # Convert to uppercase for consistent comparison
+            composer_code = match.group(1).upper()
             
             # Check if composer code exists in composers set (case-insensitive)
             if composer_code not in self.composers and \
@@ -140,6 +146,8 @@ class ConsistencyChecker:
                 self.consistency_issues["file_naming"].append(
                     f"File {filename} has composer code {composer_code} not matching any known composer directory"
                 )
+                if file_failures is not None:
+                    file_failures[file_path].append("file_naming")
     
     def check_file_header_consistency(self, files):
         """Check consistency of headers across files."""
@@ -446,52 +454,148 @@ class ConsistencyChecker:
                 self.consistency_issues["file_reading"].append(
                     f"Error reading {filename} for single voice check: {str(e)}"
                 )
+    
+    def check_for_tuplet_markers(self, files):
+        """Check for tuplet markers (V and Z) which indicate triplets or other tuplet groups."""
+        for file_path in files:
+            filename = os.path.basename(file_path)
+            tuplet_markers = []
+            
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    for line_num, line in enumerate(f, 1):
+                        # Skip comment lines
+                        if line.startswith('!'):
+                            continue
+                            
+                        # Skip reference record lines
+                        if line.startswith('*'):
+                            continue
+                            
+                        # Skip barline indicators
+                        if line.startswith('='):
+                            continue
+                            
+                        # If 'V' or 'Z' appears in the line, check each token
+                        if 'V' in line or 'Z' in line:
+                            tokens = line.strip().split('\t')
+                            
+                            # Collect tokens that end with V or Z
+                            markers_in_line = []
+                            for token in tokens:
+                                # True tuplet markers always appear at the end of a kern token
+                                # But they may be preceded by other data (like 3%4FV)
+                                if token and (token.endswith('V') or token.endswith('Z')):
+                                    # Extract the full token for context
+                                    token_type = 'start' if token.endswith('V') else 'end'
+                                    markers_in_line.append(f"{token} ({token_type} marker)")
+                            
+                            if markers_in_line:
+                                tuplet_markers.append((line_num, ", ".join(markers_in_line)))
+                
+                if tuplet_markers:
+                    marker_info = "; ".join([f"line {ln}: {m}" for ln, m in tuplet_markers[:MAX_EXAMPLES]])
+                    if len(tuplet_markers) > MAX_EXAMPLES:
+                        marker_info += f"; and {len(tuplet_markers) - MAX_EXAMPLES} more"
+                    
+                    self.consistency_issues["tuplet_markers"].append(
+                        f"File {filename} has {len(tuplet_markers)} line(s) with tuplet markers: {marker_info}"
+                    )
+                    
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(
+                    f"Error reading {filename} for tuplet marker check: {str(e)}"
+                )
         
+    ''' Driver functions '''
+    def run_critical_checks(self, files):
+        """Run all critical consistency checks that can invalidate files."""
+        print(f"Running critical checks on {len(files)} files...")
+        
+        # Reset tracking
+        self.critical_failures = {}
+        self.valid_files = set()
+        
+        # Track failures for each file
+        file_failures = defaultdict(list)
+        
+        # Run critical checks
+        self.check_file_naming_convention(files, file_failures)
+        self.check_file_header_consistency(files, file_failures)
+        self.check_time_signature_consistency(files, file_failures)
+        self.check_voice_consistency(files, file_failures)
+        self.check_voice_indicator_format(files, file_failures)
+        self.check_voice_indicator_lines(files, file_failures)
+        self.check_for_duplicate_voice_declarations(files, file_failures)
+        
+        # Determine valid files (those with no critical failures)
+        for file_path in files:
+            if file_path not in file_failures:
+                self.valid_files.add(file_path)
+            else:
+                self.critical_failures[file_path] = file_failures[file_path]
+        
+        return self.valid_files, self.critical_failures
+
+    def run_informational_checks(self, valid_files):
+        """Run informational checks on files that passed critical checks."""
+        print(f"Running informational checks on {len(valid_files)} valid files...")
+        
+        self.check_percent_sign_lines(valid_files)
+        self.check_for_single_voice_files(valid_files)
+        self.check_for_tuplet_markers(valid_files)
+    
+    
     def run_all_checks(self):
-        """Run all consistency checks."""
+        """Run all consistency checks in the proper order."""
         composer_dirs = self.find_all_composers()
         all_files = self.collect_all_files(composer_dirs)
         
         # First identify and filter out placeholder files
-        valid_files = self.identify_placeholder_files(all_files)
+        initial_valid_files = self.identify_placeholder_files(all_files)
         
-        print(f"Running consistency checks on {len(valid_files)} valid files...")
+        # Run critical checks - these determine which files are valid
+        valid_files, failures = self.run_critical_checks(initial_valid_files)
         
-        self.check_file_naming_convention(valid_files)
-        self.check_file_header_consistency(valid_files)
-        self.check_time_signature_consistency(valid_files)
-        self.check_voice_consistency(valid_files)
-        self.check_voice_indicator_format(valid_files)
-        self.check_voice_indicator_lines(valid_files)  # Add new check
-        self.check_for_duplicate_voice_declarations(valid_files)
-        self.check_percent_sign_lines(valid_files)
-        self.check_for_single_voice_files(valid_files)  # Add new check
+        # Only run informational checks on valid files
+        self.run_informational_checks(valid_files)
         
-        return self.consistency_issues
+        return self.consistency_issues, valid_files, failures
+
+    def get_valid_files(self):
+        """Return the list of files that passed all critical checks."""
+        return list(self.valid_files)
+        
+    def get_invalid_files(self):
+        """Return the list of files that failed critical checks."""
+        return list(self.critical_failures.keys())
+
 
     def generate_report(self):
         """Generate a report of all consistency issues."""
-        if not self.consistency_issues:
+        if not self.consistency_issues and not self.critical_failures:
             self.run_all_checks()
             
         print("\n=== CONSISTENCY CHECK REPORT ===\n")
         
-        # Define a priority order for reporting issues
-        # Critical issues first, informational issues last
-        priority_order = [
+        # Define categories
+        critical_categories = [
             "placeholder_files",
             "duplicate_voice_declarations",
             "voice_indicators",
             "voice_format",
-            "single_voice_files",
             "voice_count",
             "missing_headers",
             "file_naming",
             "header_consistency",
             "time_signature",
             "file_reading",
-            "percent_signs",  # Informational only
-            
+        ]
+        
+        informational_categories = [
+            "percent_signs",
+            "tuplet_markers",
+            "single_voice_files", 
         ]
         
         # Check if there are any issues at all
@@ -499,19 +603,15 @@ class ConsistencyChecker:
             print("✅ No consistency issues found!")
             return
         
-        # Count total issues for the summary at the end
-        critical_issues = 0
-        informational_issues = 0
+        # Count total issues for the summary
+        critical_issue_count = sum(len(self.consistency_issues[cat]) for cat in critical_categories)
+        informational_issue_count = sum(len(self.consistency_issues[cat]) for cat in informational_categories)
         
-        # First report critical issues by priority
+        # Report critical issues
         print("\n=== CRITICAL ISSUES ===")
         has_critical_issues = False
         
-        for check_type in priority_order:
-            # Skip percent_signs as they're informational
-            if check_type == "percent_signs":
-                continue
-                
+        for check_type in critical_categories:
             issues = self.consistency_issues.get(check_type, [])
             if issues:
                 has_critical_issues = True
@@ -521,42 +621,44 @@ class ConsistencyChecker:
                 
                 if len(issues) > MAX_EXAMPLES:
                     print(f"  ... and {len(issues) - MAX_EXAMPLES} more issues")
-                    
-                critical_issues += len(issues)
             else:
                 # Report zero issues for all check types
                 check_name = check_type.replace('_', ' ').title()
-                print(f"\n--- {check_name} (0 issues) ✅ ---")
+                print(f"--- {check_name} (0 issues) ✅ ---")
         
         if not has_critical_issues:
             print("✅ No critical issues found!")
         
-        # Then report informational issues (percent signs)
+        # Report informational issues
         print("\n=== INFORMATIONAL NOTICES ===")
-        percent_issues = self.consistency_issues.get("percent_signs", [])
-        if percent_issues:
-            print(f"\n--- Percent Signs (Mensuration Symbols) ({len(percent_issues)} files) ---")
-            for issue in percent_issues[:MAX_EXAMPLES]:  # Use MAX_EXAMPLES instead of hardcoded 10
-                print(f"  • {issue}")
-            
-            if len(percent_issues) > MAX_EXAMPLES:
-                print(f"  ... and {len(percent_issues) - MAX_EXAMPLES} more files")
+        has_informational_issues = False
+        
+        for check_type in informational_categories:
+            issues = self.consistency_issues.get(check_type, [])
+            if issues:
+                has_informational_issues = True
+                print(f"\n--- {check_type.replace('_', ' ').title()} ({len(issues)} files) ---")
+                for issue in issues[:MAX_EXAMPLES]:
+                    print(f"  • {issue}")
                 
-            informational_issues = len(percent_issues)
-        else:
+                if len(issues) > MAX_EXAMPLES:
+                    print(f"  ... and {len(issues) - MAX_EXAMPLES} more files")
+        
+        if not has_informational_issues:
             print("✅ No informational notices found!")
                 
         # Report complete summary count
         print(f"\n=== SUMMARY ===")
-        print(f"• Critical issues requiring attention: {critical_issues}")
-        print(f"• Informational notices: {informational_issues}")
-        #print(f"• Total files checked: {len(self.all_files)}")
-        print(f"• Placeholder files found: {len(self.placeholder_files)}")
-        print(f"• Valid files processed: {len(self.all_files) - len(self.placeholder_files)}")
+        print(f"• Critical issues requiring attention: {critical_issue_count}")
+        print(f"• Informational notices: {informational_issue_count}")
+        print(f"• Total files checked: {len(self.all_files)}")
+        print(f"• Invalid files (failed critical checks): {len(self.critical_failures)}")
+        print(f"• Valid files (passed critical checks): {len(self.valid_files)}")
 
 def main():
     parser = argparse.ArgumentParser(description='Check consistency of CounterpointConsensus dataset')
     parser.add_argument('--path', help=f'Path to dataset directory (default: {DATASET_PATH})')
+    parser.add_argument('--output', help='Output path for valid/invalid file lists')
     args = parser.parse_args()
     
     # Use the specified path or default path
@@ -588,8 +690,24 @@ def main():
     print()
     print(f"Checking dataset at: {dataset_path}")
     checker = ConsistencyChecker(dataset_path)
-    checker.run_all_checks()
+    issues, valid_files, invalid_files = checker.run_all_checks()
     checker.generate_report()
+    
+    # Optionally output valid and invalid file lists
+    if args.output:
+        valid_path = os.path.join(args.output, "valid_files.txt")
+        invalid_path = os.path.join(args.output, "invalid_files.txt")
+        
+        with open(valid_path, 'w') as f:
+            for file_path in checker.get_valid_files():
+                f.write(f"{file_path}\n")
+                
+        with open(invalid_path, 'w') as f:
+            for file_path in checker.get_invalid_files():
+                f.write(f"{file_path}\n")
+                
+        print(f"Valid files list written to: {valid_path}")
+        print(f"Invalid files list written to: {invalid_path}")
 
 if __name__ == "__main__":
     main()

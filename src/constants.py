@@ -21,6 +21,29 @@ TIME_SIGNATURE_NORMALIZATION_MAP = {
     4: 1,
     8: 0.5,
 }
+TIME_SIGNATURE_STRONG_BEAT_MAP = {
+    # enumerator : { denominator1 : [strong beats], denominator2 : [strong beats] }
+    6: {
+            4 : [1, 3, 5],
+            8 : [1, 4]
+        },
+    4 : 
+        {
+            4 : [1, 3], 
+            8 : [1, 3]
+        }, 
+    3: {
+            2 : [1],
+            4 : [1],
+            8 : [1]
+        },
+    2: {
+            3 : [1],
+            4 : [1]
+        }
+    }
+
+
 
 PITCH_TO_MIDI = {
     'CCC': 24, 'DDD-': 25, 'DDD': 26, 'EEE-': 27, 'EEE': 28, 'FFF': 29, 'GGG-': 30, 'GGG': 31, 'AAA-': 32, 'AAA': 33, 'BBB-': 34, 'BBB': 35,

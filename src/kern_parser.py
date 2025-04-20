@@ -213,13 +213,28 @@ def parse_note_section(note_section: List[str], metadata) -> List:
         if len(tokens) != metadata['voices'] and not line.startswith('='):
             raise ValueError(f"Line has {len(tokens)} tokens but metadata specifies {metadata['voices']} voices: '{line.strip()}'")
 
+        # Generate the new note based on the token
         for token_idx, token in enumerate(tokens):
             new_note, accidental_trackers, tie_open_flags, current_bar = kern_token_to_note(
                 token, accidental_trackers, tie_open_flags, current_bar=current_bar, token_idx=token_idx
                 )
+
+            # Afterwards, some "post-processing" of the note must be done.
             
-            # Set ties, based on the prevoius note 
-            prev_note = salami_slices[-1].notes[token_idx] if salami_slices else None
+            # Set ties, based on the prevoius note.
+            # TODO: how do ties work with sections right now? sections are not considered atm, does that matter?
+            # !!! TODO: issue with period notes; I think we should skip over period notes and keep looking back for the original note.
+            # However, we must indeed note that period notes should ALSO have their ties set. This is maybe not happening right now?
+            # Period notes have their own note type, so we must include that in the detection of which notes to set the tie to etc
+            prev_note = None
+            if salami_slices:
+                # Start from the most recent slice and look backward
+                for prev_slice_idx in range(len(salami_slices)-1, -1, -1):
+                    candidate_note = salami_slices[prev_slice_idx].notes[token_idx]
+                    # Only consider actual notes (not barlines, final_barlines, etc.)
+                    if candidate_note.note_type == 'note':
+                        prev_note = candidate_note
+                        break
             if prev_note:
                 # For sure, any note with the tie-open flag is tied.
                 if tie_open_flags[token_idx]: # and (prev_note.is_tied) and (not prev_note.is_tie_end) and (prev_note.midi_pitch == new_note.midi_pitch):
@@ -235,6 +250,9 @@ def parse_note_section(note_section: List[str], metadata) -> List:
 
             # Rounding notes is done in calculate_beat_positions() (TODO: should we also snap durations?).
             new_salami_slice.add_note(note=new_note, voice=token_idx)
+
+
+            # Constructing the ntoe is now finished, but the type of note we encountered can have implications for the metadata, and the rest of the parsing.
             
             if new_note.note_type == 'barline':
                 # Reset accidental trackers
@@ -334,8 +352,9 @@ def kern_token_to_note(
                 else:
                     raise NotImplementedError("Not using editorial accidentals is not yet implemented.")
 
-            
-                i += pitch_token_len + accidental_token_len
+                # If the pitch token len is only 1 (e.g. 1F), then we skip zero extra places over the increase i+=1 at the end of the loop.
+                # If it is longer, then skip that amount, plus any accidentals (if present).
+                i += pitch_token_len + accidental_token_len - 1
 
             elif c in accidentals:
                 raise NotImplementedError("Accidentals should be after notes only")
@@ -383,16 +402,26 @@ def kern_token_to_note(
                     raise ValueError(f"Found unexpected start of tie (char '{c}') in token '{kern_token}', at index '{token_idx}' in some line'")
                 else:
                     tie_open_flags[token_idx] = True
+                #if DEBUG: print(f"START end of tie (char '{c}') in token '{kern_token}', at voice index '{token_idx}' in bar '{current_bar}'. Tie open flags: {tie_open_flags}.")
             elif c == ']':
                 # End of a tie
                 if tie_open_flags[token_idx] == False:
-                    raise ValueError(f"Found unexpected end of tie (char '{c}') in token '{kern_token}', at index '{token_idx}' in some line'")
+                    raise ValueError(f"Found unexpected end of tie (char '{c}') in token '{kern_token}' in bar {current_bar}.'")
                 else:
                     tie_open_flags[token_idx] = False
+                #if DEBUG: print(f"END of tie (char '{c}') in token '{kern_token}', at voice index '{token_idx}' in bar '{current_bar}'. Tie open flags: {tie_open_flags}.")
+            elif c == '_':
+                # Middle of a tie: do not change tie open flags. This character is effectively skipped.
+                if tie_open_flags[token_idx] == False:
+                    raise ValueError(f"Found unexpected middle of tie (char '{c}') in token '{kern_token}' in bar {current_bar}.'")
+            elif c == 'l':
+                # This note is to be rendered as a longa. Longas are represented as two brevis notes (over two bars) in the JRP.
+                # Note: they could also be represented with duration '00' in the kern standard. The 'l' character is just to mark that it was originally a longa.
+                new_note.is_longa = True
             else:
-                raise ValueError(f"Could not parse character '{c}' in token '{kern_token}', at index '{i}'")
+                raise ValueError(f"Could not parse character '{c}' in token '{kern_token}', at index '{i}, bar {current_bar}.'")
         except Exception as e:
-            print(f"For token '{kern_token}', char '{c}', index '{i}', encountered error:\n\n")
+            print(f"For token '{kern_token}', char '{c}', bar {current_bar} encountered error:\n\n")
             raise e
         
         i += 1
@@ -522,10 +551,13 @@ def parse_keysig(line: str, metadata: dict, bar_count: int, line_idx: int) -> di
 
 def post_process_salami_slices(salami_slices: List[SalamiSlice], metadata) -> Tuple[List[SalamiSlice], Dict[str, any]]:
     """ Post-process the salami slices.  """
-    # Note, most of this could be done in one pass, but for developmental easy we do it in multiple passes.
+    # Note, most of this could be done in one pass, but for developmental ease we do it in multiple passes.
     salami_slices = set_period_notes(salami_slices)
+    salami_slices = set_tied_notes_new_occurences(salami_slices)
     salami_slices, metadata = order_voices(salami_slices, metadata)
     salami_slices = remove_barline_slice(salami_slices, metadata)
+
+    salami_slices = link_salami_slices(salami_slices, metadata)
     salami_slices = set_interval_property(salami_slices)
     salami_slices = calculate_offsets(salami_slices)  # Calculate raw offsets from bar start
     salami_slices = calculate_beat_positions(salami_slices, metadata)  # Convert offsets to beats
@@ -554,6 +586,14 @@ def set_period_notes(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
                 # Copy note, set 
                 salami_slice.notes[voice] = salami_slices[i-1].notes[voice]
                 salami_slices[i-1].notes[voice].new_occurrence = False
+    return salami_slices
+
+def set_tied_notes_new_occurences(salami_slices: List[SalamiSlice]) -> List[SalamiSlice]:
+    """ Set the new occurrences of tied notes to False """
+    for i, salami_slice in enumerate(salami_slices):
+        for voice, note in enumerate(salami_slice.notes):
+            if note.is_tied and not note.is_tie_start:
+                salami_slice.notes[voice].new_occurrence = False
     return salami_slices
 
 def order_voices(salami_slices: List[SalamiSlice], metadata: Dict[str, any]) -> Tuple[List[SalamiSlice], Dict[str, any]]:
@@ -701,7 +741,7 @@ def calculate_beat_positions(salami_slices: List[SalamiSlice], metadata) -> List
         numerator, denominator = current_time_sig_tuple[1][0]
 
         # 1) Figure out measure length in "whole-note" time
-        #    E.g. for 4/4, denominator=4 => measure_length=1.0 from DURATION_MAP
+        #    E.g. for 3/4, denominator=4 => measure_length=0.75 (because of numerator * DURATION_MAP[4])
         if str(denominator) not in DURATION_MAP:
             raise ValueError(f"Unsupported denominator {denominator}")
         measure_length = DURATION_MAP[str(denominator)] * numerator
@@ -731,6 +771,8 @@ def calculate_beat_positions(salami_slices: List[SalamiSlice], metadata) -> List
 
 def link_salami_slices(salami_slices: List[SalamiSlice], metadata) -> List[SalamiSlice]:
     """ Link the salami slices together, based on next slice with a new occurence. """
+
+
 
     return salami_slices
 

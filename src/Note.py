@@ -53,6 +53,13 @@ class SalamiSlice(FloatTruncator):
         self.absolute_intervals = None # Will be: Dict[Tuple[int, int], int]
         self.reduced_intervals = None # Will be: Dict[Tuple[int, int], int]
 
+        
+        # Link each voice to a difference slice
+        self.next_new_occurence_per_voice = [None] * num_voices
+
+        self.next_note_per_voice = [None] * num_voices
+        self.previous_note_per_voice = [None] * num_voices
+
     def add_note(self, note, voice):
         if voice >= self.num_voices:
             raise ValueError(f"Attempt to add note to voice {voice+1}, but slice only has {self.num_voices} voices")
@@ -128,7 +135,8 @@ class Note(FloatTruncator):
                 # Note quality
                 note_type: str = None,
                 new_occurence: bool = True,
-                is_triplet: bool = False,                 
+                is_triplet: bool = False,    
+                is_longa: bool = False,             
             ) -> None:
         
         # Pitch
@@ -144,6 +152,7 @@ class Note(FloatTruncator):
         self.note_type = note_type
         self.new_occurrence = new_occurence
         self.is_triplet = is_triplet  
+        self.is_longa = is_longa
 
         return
     
@@ -188,3 +197,4 @@ class Note(FloatTruncator):
             raise ValueError("Note type is not set")
         
         return
+    
