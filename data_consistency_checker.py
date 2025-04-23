@@ -1,713 +1,891 @@
 #!/usr/bin/env python3
 """
-Data Consistency Checker for Counterpoint Corpus
+Data Consistency Checker for Counterpoint Corpus (updated for critical vs informational distinction)
 
-This script validates the consistency of kern files across different composers
-in the CounterpointConsensus dataset.
+This script validates the consistency of **kern files in the CounterpointConsensus
+dataset.  All functions run by `run_critical_checks()` now accept an optional
+`file_failures` argument so they can tag files that fail a critical test.  
+Only files with **no** critical failures are passed on to the informational
+checks.
 """
 
 import os
 import re
-import pandas as pd
-from collections import defaultdict
-import glob
-from typing import Dict, List, Set, Tuple
 import argparse
+from collections import defaultdict
+from typing import Dict, List, Set, Tuple
 
-# Define paths - modify these to match your actual structure
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(ROOT_DIR, "data")
+# ─────────────────────────────── Paths & constants ──────────────────────────────
+ROOT_DIR   = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR   = os.path.join(ROOT_DIR, "data")
 
-# Primary data location - this is where we'll look first
 DATASET_PATH = os.path.join(DATA_DIR, "full", "more_than_10", "SELECTED")
+TEST_DIR     = os.path.join(DATA_DIR, "test")           # fallback
 
-# Fallback to test directory if the main dataset doesn't exist
-TEST_DIR = os.path.join(DATA_DIR, "test")
+COMPOSER_CODE_PATTERN = re.compile(r'^[A-Z]{3}$')       # three upper‑case letters
+FILE_PATTERN          = re.compile(r'.*\.krn$')         # *.krn files
 
-# Define expected structure and patterns
-COMPOSER_CODE_PATTERN = re.compile(r'^[A-Z]{3}$')  # Three uppercase letters
-FILE_PATTERN = re.compile(r'.*\.krn$')  # .krn files
-
-DEBUG = False
-MAX_EXAMPLES = 5  # Maximum number of examples to show in reports
+DEBUG        = False
+MAX_EXAMPLES = 5
 
 
-# Define consistency checks
+# ═════════════════════════════════ Main checker class ═══════════════════════════
 class ConsistencyChecker:
-    def __init__(self, dataset_path=DATASET_PATH):
-        self.dataset_path = dataset_path
-        self.composers = set()
-        self.all_files = []
-        self.placeholder_files = []  # Track placeholder files
-        self.consistency_issues = defaultdict(list)
-        
-        # New tracking for valid and invalid files
-        self.critical_failures = {}  # Dictionary mapping files to their critical failures
-        self.valid_files = set()     # Set of files that pass all critical checks
-        
-    def find_all_composers(self):
-        """Find all composer directories following the pattern."""
-        composer_dirs = []
-        
-        # Also track lowercase versions for matching
-        composer_codes_upper = set()
-        
+    # ───────────────────────────── initialisation ──────────────────────────────
+    def __init__(self, dataset_path: str = DATASET_PATH):
+        self.dataset_path: str                    = dataset_path
+        self.composers:          Set[str]         = set()
+        self.all_files:          List[str]        = []
+        self.placeholder_files:  List[str]        = []
+        self.consistency_issues: Dict[str, List[str]] = defaultdict(list)
+
+        # tracking for the new critical/informational split
+        self.critical_failures: Dict[str, List[str]] = {}   # file → [reasons]
+        self.valid_files:      Set[str]            = set()  # files with 0 critical failures
+
+        # Initialize time signature related counts here
+        self.time_signature_counts = defaultdict(int)
+        self.mensuration_counts = defaultdict(int)
+        self.ts_mensuration_pairs = defaultdict(lambda: defaultdict(int))
+        self.mensuration_position = {"before": 0, "after": 0, "both": 0, "none": 0}
+        # Note: signature_examples is local to the check function, no need to init here
+
+    # ────────────────────────────── discovery ──────────────────────────────────
+    def find_all_composers(self) -> List[str]:
+        """Return a list of directories that appear to belong to individual composers."""
+        composer_dirs: List[str] = []
+        composer_codes_upper: Set[str] = set()
+
         if DEBUG:
-            print(f"Looking for files in: {self.dataset_path}")
-            print(f"Directory exists: {os.path.exists(self.dataset_path)}")
-            if os.path.exists(self.dataset_path):
-                print(f"Directory contents: {os.listdir(self.dataset_path)}")
-        
-        # First attempt: Try to find composer directories based on structure
+            print(f"[DEBUG] Searching: {self.dataset_path} (exists={os.path.exists(self.dataset_path)})")
+
         if os.path.exists(self.dataset_path):
             for root, dirs, files in os.walk(self.dataset_path):
-                # Find any directories with composer-like names
-                for dir_name in dirs:
-                    if COMPOSER_CODE_PATTERN.match(dir_name):
-                        composer_dirs.append(os.path.join(root, dir_name))
-                        self.composers.add(dir_name)
-                        composer_codes_upper.add(dir_name.upper())
-                
-                # Also look for .krn files directly
-                krn_files = [f for f in files if f.endswith('.krn')]
+                # pick up composer directories named “ABC”
+                for d in dirs:
+                    if COMPOSER_CODE_PATTERN.match(d):
+                        composer_dirs.append(os.path.join(root, d))
+                        self.composers.add(d)
+                        composer_codes_upper.add(d.upper())
+
+                # extract composer code from lone *.krn files in otherwise flat dirs
+                krn_files = [f for f in files if f.endswith(".krn")]
                 if krn_files:
                     composer_dirs.append(root)
-                    # Try to extract composer code from filenames
-                    for file in krn_files:
-                        match = re.match(r'([A-Za-z]{3})\d+.*\.krn', file)
-                        if match:
-                            code = match.group(1).upper()
+                    for f in krn_files:
+                        m = re.match(r'([A-Za-z]{3})\d+.*\.krn', f)
+                        if m:
+                            code = m.group(1).upper()
                             self.composers.add(code)
                             composer_codes_upper.add(code)
-                            
-        # Store uppercase versions of all composer codes for comparison
-        self.composer_codes_upper = composer_codes_upper
-                            
-        # If no structured directories found, just find all directories with .krn files
-        if not composer_dirs:
-            for root, dirs, files in os.walk(self.dataset_path):
-                krn_files = [f for f in files if f.endswith('.krn')]
-                if krn_files:
-                    composer_dirs.append(root)
-                    
-        print(f"Found {len(composer_dirs)} directories with potential .krn files")
-        return composer_dirs
-    
-    def collect_all_files(self, composer_dirs):
-        """Collect all .krn files from composer directories."""
-        # Clear existing files list
-        self.all_files = []
-        
-        # If no composer directories were found, scan the entire dataset path
-        if not composer_dirs:
-            for root, dirs, files in os.walk(self.dataset_path):
-                self.all_files.extend([
-                    os.path.join(root, f) for f in files if f.endswith('.krn')
-                ])
-        else:
-            # Otherwise scan the identified composer directories
-            for composer_dir in composer_dirs:
-                if os.path.isdir(composer_dir):
-                    for root, dirs, files in os.walk(composer_dir):
-                        self.all_files.extend([
-                            os.path.join(root, f) for f in files if f.endswith('.krn')
-                        ])
-                elif os.path.isfile(composer_dir) and composer_dir.endswith('.krn'):
-                    # Handle case where composer_dir is actually a file
-                    self.all_files.append(composer_dir)
-                
-        print(f"Found {len(self.all_files)} .krn files")
-        if DEBUG:
-            if self.all_files:
-                print(f"Example files: {[os.path.basename(f) for f in self.all_files[:3]]}")
-        return self.all_files
-    
-    '''Checks'''
 
-    def check_file_naming_convention(self, files, file_failures=None):
-        """Check if file names follow expected convention."""
-        for file_path in files:
-            filename = os.path.basename(file_path)
-            # Extract composer code from file name (assuming convention: ABR####.krn)
-            match = re.match(r'([A-Za-z]{3})(\d+[a-z]?).*\.krn', filename)
-            if not match:
+        # if none found, fall back to scanning every directory for krn files
+        if not composer_dirs:
+            for root, _, files in os.walk(self.dataset_path):
+                if any(f.endswith(".krn") for f in files):
+                    composer_dirs.append(root)
+
+        self.composer_codes_upper = composer_codes_upper
+        print(f"Found {len(composer_dirs)} directories with potential .krn files")
+        return composer_dirs
+
+    def collect_all_files(self, composer_dirs: List[str]) -> List[str]:
+        """Gather every *.krn file in the candidate directories."""
+        self.all_files.clear()
+
+        if not composer_dirs:
+            # no dedicated composer dirs – scan the entire dataset
+            for root, _, files in os.walk(self.dataset_path):
+                self.all_files += [os.path.join(root, f) for f in files if f.endswith(".krn")]
+        else:
+            for d in composer_dirs:
+                if os.path.isdir(d):
+                    for root, _, files in os.walk(d):
+                        self.all_files += [os.path.join(root, f) for f in files if f.endswith(".krn")]
+                elif d.endswith(".krn"):
+                    self.all_files.append(d)
+
+        print(f"Found {len(self.all_files)} .krn files")
+        if DEBUG and self.all_files:
+            print(f"[DEBUG] Example files: {[os.path.basename(f) for f in self.all_files[:3]]}")
+        return self.all_files
+
+    # ──────────────────────────── critical checks ──────────────────────────────
+    # NOTE: every critical‑check method now accepts `file_failures` to note
+    #       per‑file reasons for invalidation.  Add to it only for *critical*
+    #       failures – informational findings are handled separately.
+
+    # ✓ already updated by the user
+    def check_file_naming_convention(self, files: List[str], file_failures=None):
+        """Verify that filenames follow the ABC####.krn convention and map to a known composer."""
+        for fp in files:
+            fn = os.path.basename(fp)
+            m = re.match(r'([A-Za-z]{3})(\d+[a-z]?).*\.krn', fn)
+            if not m:
                 self.consistency_issues["file_naming"].append(
-                    f"File doesn't match naming pattern: {filename}"
+                    f"File doesn't match naming pattern: {fn}"
                 )
                 if file_failures is not None:
-                    file_failures[file_path].append("file_naming")
+                    file_failures[fp].append("file_naming")
                 continue
-                
-            composer_code = match.group(1).upper()
-            
-            # Check if composer code exists in composers set (case-insensitive)
+
+            composer_code = m.group(1).upper()
             if composer_code not in self.composers and \
-               not any(code.upper() == composer_code for code in self.composers):
+               not any(c.upper() == composer_code for c in self.composers):
                 self.consistency_issues["file_naming"].append(
-                    f"File {filename} has composer code {composer_code} not matching any known composer directory"
+                    f"File {fn} has composer code {composer_code} not recognised"
                 )
                 if file_failures is not None:
-                    file_failures[file_path].append("file_naming")
-    
-    def check_file_header_consistency(self, files):
-        """Check consistency of headers across files."""
-        # Define required headers to check for
-        required_headers = {'JRPID', 'VOICES'}
-        headers_by_composer = defaultdict(lambda: defaultdict(set))
-        
-        for file_path in files:
-            composer_code = None
-            file_headers = set()
-            
-            # Extract composer code from filename or path
-            filename = os.path.basename(file_path)
-            match = re.match(r'([A-Za-z]{3})\d+.*\.krn', filename)
-            if match:
-                composer_code = match.group(1).upper()  # Convert to uppercase for comparison
-            else:
-                # Try to extract from path
-                composer_code = None
-                for part in os.path.normpath(file_path).split(os.sep):
-                    if COMPOSER_CODE_PATTERN.match(part):
-                        composer_code = part.upper()  # Convert to uppercase
-                        break
-            
-            if not composer_code:
+                    file_failures[fp].append("file_naming")
+
+    def check_file_header_consistency(self, files: List[str], file_failures=None):
+        """Ensure that mandatory reference records appear and are consistent within each composer."""
+        mandatory = {'JRPID', 'VOICES'}
+        headers_by_composer: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
+
+        for fp in files:
+            fn = os.path.basename(fp)
+            # composer code from filename or path
+            m = re.match(r'([A-Za-z]{3})\d+.*\.krn', fn)
+            composer = m.group(1).upper() if m else next(
+                (part.upper() for part in os.path.normpath(fp).split(os.sep)
+                 if COMPOSER_CODE_PATTERN.match(part)), None)
+
+            if not composer:
                 self.consistency_issues["header_consistency"].append(
-                    f"Could not determine composer code for {file_path}"
+                    f"Cannot determine composer code for {fp}"
                 )
+                if file_failures is not None:
+                    file_failures[fp].append("header_consistency")
                 continue
-            
-            # Read file headers
+
+            present_headers: Set[str] = set()
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(fp, encoding="utf-8") as f:
                     for line in f:
-                        if not line.startswith('!!!'):
+                        if not line.startswith("!!!"):
                             break
-                        
-                        # Check for any required header appearing in the line
-                        for header in required_headers:
-                            # Case-insensitive check for header in the line
-                            if f'!!!{header.lower()}:' in line.lower():
-                                file_headers.add(header)
-                        
-                        # Also capture any other headers for consistency checking
-                        header_match = re.match(r'!!!([A-Za-z]+):', line)
-                        if header_match:
-                            header_name = header_match.group(1).upper()
-                            file_headers.add(header_name)
-                            
-                # Check for missing required headers
-                missing_headers = required_headers - file_headers
-                if missing_headers:
+                        # case‑insensitive search for mandatory headers
+                        for h in mandatory:
+                            if line.lower().startswith(f"!!!{h.lower()}:"):
+                                present_headers.add(h)
+                        m_hdr = re.match(r'!!!([A-Za-z]+):', line)
+                        if m_hdr:
+                            headers_by_composer[composer][m_hdr.group(1).upper()].add(fn)
+
+                missing = mandatory - present_headers
+                if missing:
                     self.consistency_issues["missing_headers"].append(
-                        f"File {filename} missing required headers: {', '.join(missing_headers)}"
+                        f"File {fn} missing: {', '.join(sorted(missing))}"
                     )
-                
-                # Store headers for composer-level consistency check
-                for header in file_headers:
-                    headers_by_composer[composer_code][header].add(filename)
-                    
+                    if file_failures is not None:
+                        file_failures[fp].append("missing_headers")
+
             except Exception as e:
-                self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename}: {str(e)}"
-                )
-        
-        # Check for header consistency within composers
-        for composer, headers in headers_by_composer.items():
-            all_files_count = len(set([f for files in headers.values() for f in files]))
-            for header, files in headers.items():
-                if len(files) < all_files_count:
+                self.consistency_issues["file_reading"].append(f"Error reading {fn}: {e}")
+                if file_failures is not None:
+                    file_failures[fp].append("file_reading")
+
+        # composer‑level header consistency (informative but still critical)
+        for comp, hmap in headers_by_composer.items():
+            all_files = {f for files in hmap.values() for f in files}
+            total = len(all_files)
+            for hdr, files_with_hdr in hmap.items():
+                if len(files_with_hdr) < total:
                     self.consistency_issues["header_consistency"].append(
-                        f"Header {header} only present in {len(files)}/{all_files_count} files for composer {composer}"
+                        f"Composer {comp}: header {hdr} appears in "
+                        f"{len(files_with_hdr)}/{total} files"
                     )
-    
-    def check_time_signature_consistency(self, files):
-        """Check if time signatures are properly formatted."""
-        for file_path in files:
-            filename = os.path.basename(file_path)
-            time_sigs = []
+                    # we cannot point to exact offending files easily; mark all lacking files
+                    lacking = all_files - files_with_hdr
+                    if file_failures is not None:
+                        for lf in lacking:
+                            file_failures[lf].append("header_consistency")
+
+    def check_time_signature_consistency(self, files: List[str], file_failures=None):
+        """Validate *M time‑signature tokens."""
+        ts_re_simple   = re.compile(r'^\d+/\d+$')      # e.g. 4/2
+        ts_re_integer  = re.compile(r'^\d+$')          # single integer (mensural)
+        ts_re_complex  = re.compile(r'^\d+/\d+%\d+$')  # e.g. 3/3%2
+
+        for fp in files:
+            fn = os.path.basename(fp)
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(fp, encoding="utf-8") as f:
                     for line in f:
-                        # Skip *MM lines (metronome markings) which start with *M but aren't time signatures
-                        if line.startswith('*M') and not line.startswith('*MM'):
-                            time_sigs.append(line.strip())
-                            # Check if each time signature in the line is properly formatted
-                            tokens = line.strip().split('\t')
-                            for token in tokens:
-                                if token.startswith('*M') and not token.startswith('*MM'):
-                                    time_sig = token[2:]  # Remove '*M' prefix
-                                    if not (re.match(r'^\d+/\d+$', time_sig) or  # e.g. "2/1"
-                                           re.match(r'^\d+$', time_sig) or     # e.g. "3"
-                                           re.match(r'^\d+/\d+%\d+$', time_sig) or  # e.g. "3/3%2"
-                                           time_sig == '*'):                   # Copy previous
+                        if line.startswith("*M") and not line.startswith("*MM"):
+                            for token in line.rstrip().split('\t'):
+                                if token.startswith("*M") and not token.startswith("*MM"):
+                                    sig = token[2:]
+                                    ok = (
+                                        ts_re_simple.match(sig) or
+                                        ts_re_integer.match(sig) or
+                                        ts_re_complex.match(sig) or
+                                        sig == "*"
+                                    )
+                                    if not ok:
                                         self.consistency_issues["time_signature"].append(
-                                            f"Invalid time signature format in {filename}: {token}"
+                                            f"Invalid time sig in {fn}: {token}"
                                         )
+                                        if file_failures is not None:
+                                            file_failures[fp].append("time_signature")
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename} for time signature check: {str(e)}"
+                    f"Error reading {fn} for time‑signature check: {e}"
                 )
-    
-    def check_voice_consistency(self, files):
-        """Check that voice counts match the specified number."""
-        for file_path in files:
-            filename = os.path.basename(file_path)
-            declared_voices = None
-            actual_voices = None
-            
+                if file_failures is not None:
+                    file_failures[fp].append("file_reading")
+
+    def check_voice_consistency(self, files: List[str], file_failures=None):
+        """Ensure !!!voices: N matches the number of **kern spines on the first data line."""
+        for fp in files:
+            fn = os.path.basename(fp)
+            declared = None
+            actual = None
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(fp, encoding="utf-8") as f:
                     for line in f:
-                        # Check for voice count declaration
-                        if line.startswith('!!!voices:'):
+                        if line.startswith("!!!voices:"):
                             try:
-                                declared_voices = int(line.split(':')[1].strip())
+                                declared = int(line.split(":", 1)[1].strip())
                             except ValueError:
                                 self.consistency_issues["voice_count"].append(
-                                    f"Invalid voice count format in {filename}: {line.strip()}"
+                                    f"Invalid voices meta in {fn}: {line.strip()}"
                                 )
-                            
-                        # Count actual voices by checking **kern occurrences in a line
-                        if line.startswith('**'):
-                            actual_voices = line.count('**kern')
+                                if file_failures is not None:
+                                    file_failures[fp].append("voice_count")
+                        # Find the first interpretation line (starts with '**')
+                        if line.startswith("**"):
+                            # Count the number of spines that are exactly '**kern'
+                            actual = sum(1 for token in line.strip().split('\t') if token == "**kern")
                             break
-                            
-                # Compare declared vs actual voice count
-                if declared_voices is not None and actual_voices is not None:
-                    if declared_voices != actual_voices:
-                        self.consistency_issues["voice_count"].append(
-                            f"Voice count mismatch in {filename}: declared={declared_voices}, actual={actual_voices}"
-                        )
-                            
-            except Exception as e:
-                self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename} for voice consistency check: {str(e)}"
-                )
-    
-    def check_percent_sign_lines(self, files):
-        """Check for lines containing percent signs (special mensuration)."""
-        for file_path in files:
-            filename = os.path.basename(file_path)
-            percent_lines = []
-            
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    for i, line in enumerate(f, 1):
-                        if '%' in line:
-                            percent_lines.append(i)
-                            
-                if percent_lines:
-                    self.consistency_issues["percent_signs"].append(
-                        f"File {filename} has % signs on lines: {percent_lines}"
+                if declared is not None and actual is not None and declared != actual:
+                    self.consistency_issues["voice_count"].append(
+                        f"Voice mismatch in {fn}: declared {declared}, found {actual}"
                     )
-                            
+                    if file_failures is not None:
+                        file_failures[fp].append("voice_count")
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename} for percent sign check: {str(e)}"
+                    f"Error reading {fn} for voice‑count check: {e}"
                 )
-    
-    def identify_placeholder_files(self, files):
-        """Identify old placeholder files (files with less than 3 lines)."""
-        valid_files = []
-        
-        for file_path in files:
-            filename = os.path.basename(file_path)
+                if file_failures is not None:
+                    file_failures[fp].append("file_reading")
+
+    def check_voice_indicator_format(self, files: List[str], file_failures=None):
+        """Check that !!!voices: is an integer (not e.g. 'three')."""
+        for fp in files:
+            fn = os.path.basename(fp)
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    # Read up to 3 lines to check if file is a placeholder
-                    lines = [line for _, line in zip(range(3), f)]
-                    if len(lines) < 3:
-                        self.placeholder_files.append(file_path)
-                        self.consistency_issues["placeholder_files"].append(
-                            f"File {filename} is a placeholder file with only {len(lines)} lines"
-                        )
-                    else:
-                        valid_files.append(file_path)
-            except Exception as e:
-                self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename}: {str(e)}"
-                )
-                # If we can't read the file, don't include it in further checks
-                
-        print(f"Found {len(self.placeholder_files)} placeholder files (excluded from further checks)")
-        return valid_files
-    
-    def check_voice_indicator_format(self, files):
-        """Check that voice indicators follow the standard format '!!!voices: N' where N is an integer."""
-        for file_path in files:
-            filename = os.path.basename(file_path)
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    for line_num, line in enumerate(f, 1):
-                        if line.startswith('!!!voices:'):
+                with open(fp, encoding="utf-8") as f:
+                    for ln, line in enumerate(f, 1):
+                        if line.startswith("!!!voices:"):
                             # Extract everything after the colon and strip whitespace
                             voice_value = line.split(':', 1)[1].strip()
                             
                             # Check if it's a simple integer
                             if not re.match(r'^\d+$', voice_value):
                                 self.consistency_issues["voice_format"].append(
-                                    f"Non-standard voice indicator in {filename} (line {line_num}): {line.strip()}. "
+                                    f"Non‑integer voices in {fn} (line {ln}): {line.strip()}"
                                 )
-            except Exception as e:
-                self.consistency_issues["file_reading"].append(f"Error reading {filename} for voice indicator check: {str(e)}")
-    
-    def check_for_duplicate_voice_declarations(self, files):
-        """Check for files that declare the voices metadata header multiple times."""
-        for file_path in files:
-            filename = os.path.basename(file_path)
-            voice_declaration_lines = []
-            
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    for line_num, line in enumerate(f, 1):
-                        if line.lower().startswith('!!!voices:'):
-                            voice_declaration_lines.append((line_num, line.strip()))
-                
-                if len(voice_declaration_lines) > 1:
-                    declaration_info = ", ".join([f"line {line_num}: '{text}'" for line_num, text in voice_declaration_lines])
-                    self.consistency_issues["duplicate_voice_declarations"].append(
-                        f"File {filename} has {len(voice_declaration_lines)} voice declarations: {declaration_info}"
-                    )
-                    
+                                if file_failures is not None:
+                                    file_failures[fp].append("voice_format")
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename} for duplicate voice declarations check: {str(e)}")
-    
-    def check_voice_indicator_lines(self, files):
-        """Check for multiple lines that start with *Ivo, *I", or *I' in each file."""
-        for file_path in files:
-            filename = os.path.basename(file_path)
-            voice_indicator_lines = []
-            
+                    f"Error reading {fn} for voice‑format check: {e}"
+                )
+                if file_failures is not None:
+                    file_failures[fp].append("file_reading")
+
+    def check_voice_indicator_lines(self, files: List[str], file_failures=None):
+        """Each of *Ivo, *I", *I' may appear at most once."""
+        for fp in files:
+            fn = os.path.basename(fp)
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    for line_num, line in enumerate(f, 1):
-                        # Check for lines that start with voice indicators
-                        if line.startswith('*Ivo') or line.startswith('*I"') or line.startswith("*I'"):
-                            voice_indicator_lines.append((line_num, line.strip()))
-                
-                # Group the indicators by type for better reporting
-                by_type = defaultdict(list)
-                for line_num, line in voice_indicator_lines:
-                    if line.startswith('*Ivo'):
-                        by_type['*Ivo'].append((line_num, line))
-                    elif line.startswith('*I"'):
-                        by_type['*I"'].append((line_num, line))
-                    elif line.startswith("*I'"):
-                        by_type["*I'"].append((line_num, line))
-                
-                # Check for issues: each type should appear at most once per file
-                for indicator_type, occurrences in by_type.items():
-                    if len(occurrences) > 1:
-                        # More than one line of this type in the file
-                        details = ", ".join([f"line {ln}: '{text}'" for ln, text in occurrences[:MAX_EXAMPLES]])
-                        if len(occurrences) > MAX_EXAMPLES:
-                            details += f", ... and {len(occurrences) - MAX_EXAMPLES} more"
-                        
+                with open(fp, encoding="utf-8") as f:
+                    occurrences = defaultdict(list)   # indicator → [(ln, text)]
+                    for ln, line in enumerate(f, 1):
+                        if line.startswith("*Ivo"):
+                            occurrences["*Ivo"].append((ln, line.strip()))
+                        elif line.startswith('*I"'):
+                            occurrences['*I"'].append((ln, line.strip()))
+                        elif line.startswith("*I'"):
+                            occurrences["*I'"].append((ln, line.strip()))
+
+                for ind, occ in occurrences.items():
+                    if len(occ) > 1:
+                        detail = ", ".join([f"line {ln}" for ln, _ in occ[:MAX_EXAMPLES]])
+                        if len(occ) > MAX_EXAMPLES:
+                            detail += f", … (+{len(occ)-MAX_EXAMPLES})"
                         self.consistency_issues["voice_indicators"].append(
-                            f"File {filename} has {len(occurrences)} '{indicator_type}' indicator lines (should have at most 1): {details}"
+                            f"{fn}: {ind} appears {len(occ)}× ({detail})"
                         )
-                    
+                        if file_failures is not None:
+                            file_failures[fp].append("voice_indicators")
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename} for voice indicator check: {str(e)}"                )
-    
-    def check_for_single_voice_files(self, files):
-        """Identify files that contain only a single voice."""
-        for file_path in files:
-            filename = os.path.basename(file_path)
-            has_single_voice = False
-            
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    declared_voices = None
-                    actual_voices = None
-                    
-                    for line in f:
-                        # Check for voice count declaration
-                        if line.startswith('!!!voices:'):
-                            try:
-                                declared_voices = int(line.split(':')[1].strip())
-                                if declared_voices == 1:
-                                    has_single_voice = True
-                            except ValueError:
-                                # Already handled by check_voice_indicator_format
-                                pass
-                            
-                        # Check actual voices in the data
-                        if line.startswith('**'):
-                            actual_voices = line.count('**kern')
-                            if actual_voices == 1:
-                                has_single_voice = True
-                            break
-                    
-                    if has_single_voice:
-                        declared_info = f"declared={declared_voices}" if declared_voices is not None else "declaration not found"
-                        actual_info = f"actual={actual_voices}" if actual_voices is not None else "actual count not found"
-                        self.consistency_issues["single_voice_files"].append(
-                            f"File {filename} contains only a single voice ({declared_info}, {actual_info})"
-                        )
-                        
-            except Exception as e:
-                self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename} for single voice check: {str(e)}"
+                    f"Error reading {fn} for voice‑indicator check: {e}"
                 )
-    
-    def check_for_tuplet_markers(self, files):
-        """Check for tuplet markers (V and Z) which indicate triplets or other tuplet groups."""
-        for file_path in files:
-            filename = os.path.basename(file_path)
-            tuplet_markers = []
-            
+                if file_failures is not None:
+                    file_failures[fp].append("file_reading")
+
+    def check_for_duplicate_voice_declarations(self, files: List[str], file_failures=None):
+        """Detect multiple !!!voices: lines."""
+        for fp in files:
+            fn = os.path.basename(fp)
+            decl_lines: List[int] = []
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    for line_num, line in enumerate(f, 1):
-                        # Skip comment lines
-                        if line.startswith('!'):
-                            continue
-                            
-                        # Skip reference record lines
-                        if line.startswith('*'):
-                            continue
-                            
-                        # Skip barline indicators
-                        if line.startswith('='):
-                            continue
-                            
-                        # If 'V' or 'Z' appears in the line, check each token
-                        if 'V' in line or 'Z' in line:
-                            tokens = line.strip().split('\t')
-                            
-                            # Collect tokens that end with V or Z
-                            markers_in_line = []
-                            for token in tokens:
-                                # True tuplet markers always appear at the end of a kern token
-                                # But they may be preceded by other data (like 3%4FV)
-                                if token and (token.endswith('V') or token.endswith('Z')):
-                                    # Extract the full token for context
-                                    token_type = 'start' if token.endswith('V') else 'end'
-                                    markers_in_line.append(f"{token} ({token_type} marker)")
-                            
-                            if markers_in_line:
-                                tuplet_markers.append((line_num, ", ".join(markers_in_line)))
-                
-                if tuplet_markers:
-                    marker_info = "; ".join([f"line {ln}: {m}" for ln, m in tuplet_markers[:MAX_EXAMPLES]])
-                    if len(tuplet_markers) > MAX_EXAMPLES:
-                        marker_info += f"; and {len(tuplet_markers) - MAX_EXAMPLES} more"
-                    
-                    self.consistency_issues["tuplet_markers"].append(
-                        f"File {filename} has {len(tuplet_markers)} line(s) with tuplet markers: {marker_info}"
+                with open(fp, encoding="utf-8") as f:
+                    for ln, line in enumerate(f, 1):
+                        if line.lower().startswith("!!!voices:"):
+                            decl_lines.append(ln)
+                if len(decl_lines) > 1:
+                    self.consistency_issues["duplicate_voice_declarations"].append(
+                        f"{fn}: multiple !!!voices: ({', '.join(map(str, decl_lines))})"
                     )
+                    if file_failures is not None:
+                        file_failures[fp].append("duplicate_voice_declarations")
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(
+                    f"Error reading {fn} for duplicate‑voices check: {e}"
+                )
+                if file_failures is not None:
+                    file_failures[fp].append("file_reading")
+
+    def check_for_single_voice_files(self, files: List[str], file_failures=None):
+        for fp in files:
+            fn = os.path.basename(fp)
+            single = False
+            declared = actual = None
+            try:
+                with open(fp, encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("!!!voices:"):
+                            try:
+                                declared = int(line.split(":", 1)[1].strip())
+                                if declared == 1:
+                                    single = True
+                            except ValueError:
+                                pass
+                        if line.startswith("**"):
+                            actual = line.count("**kern")
+                            if actual == 1:
+                                single = True
+                            break
+                if single:
+                    if file_failures is not None:
+                        file_failures[fp].append(
+                        f"{fn} is single‑voice (declared={declared}, actual={actual})"
+                        )
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(
+                    f"Error reading {fn} for single‑voice check: {e}"
+                )
+                if file_failures is not None:
+                    file_failures[fp].append("file_reading")
+
+
+
+    # ────────────────────────── informational checks ───────────────────────────
+    def check_percent_sign_lines(self, files: List[str]):
+        for fp in files:
+            fn = os.path.basename(fp)
+            try:
+                with open(fp, encoding="utf-8") as f:
+                    lines = [i for i, line in enumerate(f, 1) if '%' in line]
+                if lines:
+                    self.consistency_issues["percent_signs"].append(
+                        f"{fn} contains % on lines: {lines[:MAX_EXAMPLES]}{' …' if len(lines) > MAX_EXAMPLES else ''}"
+                    )
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(
+                    f"Error reading {fn} for %‑sign check: {e}"
+                )
+    
+    def check_for_tuplet_markers(self, files: List[str]):
+        for fp in files:
+            fn = os.path.basename(fp)
+            markers: List[Tuple[int, str]] = []
+            try:
+                with open(fp, encoding="utf-8") as f:
+                    for ln, line in enumerate(f, 1):
+                        if line.startswith(("!", "*", "=")):
+                            continue
+                        if 'V' in line or 'Z' in line:
+                            toks = [t for t in line.strip().split('\t')
+                                    if t.endswith('V') or t.endswith('Z')]
+                            if toks:
+                                markers.append((ln, ", ".join(toks)))
+                if markers:
+                    first = "; ".join([f"line {ln}: {txt}" for ln, txt in markers[:MAX_EXAMPLES]])
+                    if len(markers) > MAX_EXAMPLES:
+                        first += f"; … (+{len(markers)-MAX_EXAMPLES})"
+                    self.consistency_issues["tuplet_markers"].append(
+                        f"{fn}: tuplet markers found ({first})"
+                    )
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(
+                    f"Error reading {fn} for tuplet‑marker check: {e}"
+                )
+
+    def check_time_signature_indications(self, files: List[str]):
+        """
+        Collect all time signature indications (*M tokens) across files and
+        check if they have corresponding mensuration indicators (*met) in the line before OR after.
+        Counts EVERY occurrence of each time signature, not just unique ones per file.
+        """
+        # Clear previous counts before recalculating for this run
+        self.time_signature_counts.clear()
+        self.mensuration_counts.clear()
+        self.ts_mensuration_pairs.clear()
+        self.mensuration_position = {"before": 0, "after": 0, "both": 0, "none": 0} # Re-init simple dict
+        signature_examples = defaultdict(list) # Local variable, init here is fine
+        
+        for fp in files:
+            fn = os.path.basename(fp)
+            
+            try:
+                with open(fp, encoding="utf-8") as f:
+                    lines = f.readlines()
+                    
+                    for line_num, line in enumerate(lines):
+                        # Check for time signature tokens
+                        if line.startswith("*M") and not line.startswith("*MM"):
+                            # Get all time signatures in this line, not just unique ones
+                            time_sig_tokens = []
+                            for token in line.strip().split('\t'):
+                                if token.startswith("*M") and not token.startswith("*MM"):
+                                    time_sig_tokens.append(token)
+                                    # Count each occurrence immediately
+                                    self.time_signature_counts[token] += 1
+                            
+                            # For each time signature in this line (allows duplicates)
+                            for sig in time_sig_tokens:
+                                # Track unique mensuration tokens before and after
+                                mensuration_before = set()
+                                mensuration_after = set()
+                                
+                                # Check previous line for mensurations
+                                if line_num > 0:
+                                    prev_line = lines[line_num-1]
+                                    for token in prev_line.strip().split('\t'):
+                                        if token.startswith("*met"):
+                                            mensuration_before.add(token)
+                                
+                                # Check next line for mensurations
+                                if line_num < len(lines) - 1:
+                                    next_line = lines[line_num+1]
+                                    for token in next_line.strip().split('\t'):
+                                        if token.startswith("*met"):
+                                            mensuration_after.add(token)
+                                
+                                # Count each unique mensuration token only once per time signature occurrence
+                                for met_token in mensuration_before:
+                                    self.mensuration_counts[met_token] += 1
+                                    self.ts_mensuration_pairs[sig][f"{met_token} (before)"] += 1
+                                    
+                                for met_token in mensuration_after:
+                                    self.mensuration_counts[met_token] += 1
+                                    self.ts_mensuration_pairs[sig][f"{met_token} (after)"] += 1
+                                
+                                # Track position statistics
+                                if mensuration_before and mensuration_after:
+                                    self.mensuration_position["both"] += 1
+                                elif mensuration_before:
+                                    self.mensuration_position["before"] += 1
+                                elif mensuration_after:
+                                    self.mensuration_position["after"] += 1
+                                else:
+                                    self.mensuration_position["none"] += 1
+                                
+                                # Store example for reporting
+                                if len(signature_examples[sig]) < MAX_EXAMPLES:
+                                    signature_examples[sig].append((fn, line_num+1))
                     
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {filename} for tuplet marker check: {str(e)}"
+                    f"Error reading {fn} for time signature indications check: {e}"
                 )
         
-    ''' Driver functions '''
-    def run_critical_checks(self, files):
-        """Run all critical consistency checks that can invalidate files."""
-        print(f"Running critical checks on {len(files)} files...")
+        # Sort signatures by frequency for reporting
+        sorted_sigs = sorted(self.time_signature_counts.items(), key=lambda x: (-x[1], x[0]))
         
-        # Reset tracking
-        self.critical_failures = {}
-        self.valid_files = set()
+        if sorted_sigs:
+            self.consistency_issues["time_signature_indications"] = []
+            self.consistency_issues["time_signature_indications"].append(
+                f"Found {len(sorted_sigs)} unique time signature indications with {sum(self.time_signature_counts.values())} total occurrences:"
+            )
+            
+            for sig, count in sorted_sigs:
+                examples = signature_examples[sig]
+                example_str = "; ".join([f"{f} (line {l})" for f, l in examples[:3]])
+                if len(examples) > 3:
+                    example_str += f"; and {len(examples) - 3} more"
+                
+                # Report on mensurations
+                mensuration_info = ""
+                paired_mensuration = self.ts_mensuration_pairs.get(sig, {})
+                if paired_mensuration:
+                    paired_str = ", ".join([f"{m} ({c})" for m, c in sorted(
+                        paired_mensuration.items(), key=lambda x: (-x[1], x[0]))])
+                    mensuration_info = f" [Mensurations: {paired_str}]"
+                
+                self.consistency_issues["time_signature_indications"].append(
+                    f"  {sig}: appears {count} total times.{mensuration_info} Examples: {example_str}"
+                )
         
-        # Track failures for each file
-        file_failures = defaultdict(list)
+        return self.time_signature_counts
+
+    def check_for_rscale_tokens(self, files: List[str]):
+        """
+        Add an informational notice if any token in any line starts with '*rscale'.
+        """
+        for fp in files:
+            fn = os.path.basename(fp)
+            try:
+                with open(fp, encoding="utf-8") as f:
+                    for ln, line in enumerate(f, 1):
+                        tokens = line.strip().split('\t')
+                        for token in tokens:
+                            if token.startswith("*rscale"):
+                                self.consistency_issues["rscale_tokens"].append(
+                                    f"{fn}: '*rscale' found on line {ln}"
+                                )
+                                # Only need to report once per file
+                                raise StopIteration
+            except StopIteration:
+                continue
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(
+                    f"Error reading {fn} for rscale check: {e}"
+                )
+
+    # ─────────────────────────── placeholder filter ────────────────────────────
+    def identify_placeholder_files(self, files: List[str], file_failures=None) -> List[str]:
+        """Identify files with minimal data content (likely placeholders)."""
+        valid: List[str] = []
+        MIN_DATA_LINES = 4  # Threshold for considering a file non-placeholder
+
+        for fp in files:
+            fn = os.path.basename(fp)
+            data_line_count = 0
+            is_placeholder = False
+            try:
+                with open(fp, encoding="utf-8") as f:
+                    for line in f:
+                        line_strip = line.strip()
+                        # Count lines that are not comments, headers, interpretations, or spine manipulators
+                        if line_strip and not line_strip.startswith(('!', '*', '=')):
+                            data_line_count += 1
+                
+                if data_line_count < MIN_DATA_LINES:
+                    is_placeholder = True
+                    self.placeholder_files.append(fp)
+                    self.consistency_issues["placeholder_files"].append(
+                        f"{fn} is likely a placeholder (< {MIN_DATA_LINES} data lines)"
+                    )
+                    if file_failures is not None:
+                        file_failures[fp].append("placeholder_file")
+                else:
+                    valid.append(fp)
+
+            except Exception as e:
+                self.consistency_issues["file_reading"].append(f"Error reading {fn} for placeholder check: {e}")
+                if file_failures is not None:
+                    # Consider read errors as critical failures too
+                    file_failures[fp].append("file_reading_placeholder")
+
+        print(f"Identified {len(self.placeholder_files)} potential placeholder files based on content.")
+        return valid
+
+    # ───────────────────────── driver routines ────────────────────────────────
+    def run_critical_checks(self, files: List[str]):
+        print(f"Running critical checks on {len(files)} files…")
+        self.critical_failures.clear()
+        self.valid_files.clear()
+
+        file_failures: defaultdict[str, List[str]] = defaultdict(list)
+
+        # Run placeholder check first as it's a fundamental validity issue
+        files_after_placeholder_check = self.identify_placeholder_files(files, file_failures)
+
+        # Run other Critical checks only on files that are not placeholders
+        self.check_file_naming_convention(files_after_placeholder_check, file_failures)
+        self.check_file_header_consistency(files_after_placeholder_check, file_failures)
+        self.check_time_signature_consistency(files_after_placeholder_check, file_failures)
+        self.check_voice_consistency(files_after_placeholder_check, file_failures)
+        self.check_voice_indicator_format(files_after_placeholder_check, file_failures)
+        self.check_voice_indicator_lines(files_after_placeholder_check, file_failures)
+        self.check_for_duplicate_voice_declarations(files_after_placeholder_check, file_failures)
+        self.check_for_single_voice_files(files_after_placeholder_check, file_failures)
         
-        # Run critical checks
-        self.check_file_naming_convention(files, file_failures)
-        self.check_file_header_consistency(files, file_failures)
-        self.check_time_signature_consistency(files, file_failures)
-        self.check_voice_consistency(files, file_failures)
-        self.check_voice_indicator_format(files, file_failures)
-        self.check_voice_indicator_lines(files, file_failures)
-        self.check_for_duplicate_voice_declarations(files, file_failures)
-        
-        # Determine valid files (those with no critical failures)
-        for file_path in files:
-            if file_path not in file_failures:
-                self.valid_files.add(file_path)
-            else:
-                self.critical_failures[file_path] = file_failures[file_path]
-        
+
+        # classify all originally passed files
+        for fp in files: # Iterate over the original list to capture placeholder failures too
+            if fp in file_failures and file_failures[fp]:
+                self.critical_failures[fp] = list(set(file_failures[fp])) # Ensure unique reasons
+            elif fp in files_after_placeholder_check: # Only add if it passed placeholder and other checks
+                 self.valid_files.add(fp)
+
+
         return self.valid_files, self.critical_failures
 
-    def run_informational_checks(self, valid_files):
-        """Run informational checks on files that passed critical checks."""
-        print(f"Running informational checks on {len(valid_files)} valid files...")
-        
+    def run_informational_checks(self, valid_files: List[str]):
+        print(f"Running informational checks on {len(valid_files)} files…")
         self.check_percent_sign_lines(valid_files)
-        self.check_for_single_voice_files(valid_files)
+        
         self.check_for_tuplet_markers(valid_files)
-    
-    
+        self.check_time_signature_indications(valid_files)
+        self.check_for_rscale_tokens(valid_files)
+
     def run_all_checks(self):
-        """Run all consistency checks in the proper order."""
-        composer_dirs = self.find_all_composers()
-        all_files = self.collect_all_files(composer_dirs)
-        
-        # First identify and filter out placeholder files
-        initial_valid_files = self.identify_placeholder_files(all_files)
-        
-        # Run critical checks - these determine which files are valid
-        valid_files, failures = self.run_critical_checks(initial_valid_files)
-        
-        # Only run informational checks on valid files
-        self.run_informational_checks(valid_files)
-        
-        return self.consistency_issues, valid_files, failures
+        dirs  = self.find_all_composers()
+        files = self.collect_all_files(dirs)
+        # Placeholder check is now integrated into run_critical_checks
 
-    def get_valid_files(self):
-        """Return the list of files that passed all critical checks."""
+        valid, _ = self.run_critical_checks(files) # Pass the full list here
+        self.run_informational_checks(list(valid)) # Convert set to list for iteration
+        return self.consistency_issues, valid, self.critical_failures
+
+    # ──────────────────────── convenience accessors ───────────────────────────
+    def get_valid_files(self) -> List[str]:
         return list(self.valid_files)
-        
-    def get_invalid_files(self):
-        """Return the list of files that failed critical checks."""
-        return list(self.critical_failures.keys())
 
+    def get_invalid_files(self) -> List[str]:
+        return list(self.critical_failures)
+    
+    def get_time_signature_counts(self) -> Dict[str, int]:
+        """Returns the dictionary mapping time signatures to their occurrence counts."""
+        # Assumes check_time_signature_indications has already been run by run_informational_checks
+        return self.time_signature_counts
 
+    # ────────────────────────────── reporting ─────────────────────────────────
     def generate_report(self):
-        """Generate a report of all consistency issues."""
         if not self.consistency_issues and not self.critical_failures:
             self.run_all_checks()
-            
-        print("\n=== CONSISTENCY CHECK REPORT ===\n")
-        
-        # Define categories
+
+        print("\n=== CONSISTENCY CHECK REPORT ===\n")
+
         critical_categories = [
-            "placeholder_files",
-            "duplicate_voice_declarations",
-            "voice_indicators",
-            "voice_format",
-            "voice_count",
-            "missing_headers",
-            "file_naming",
-            "header_consistency",
-            "time_signature",
-            "file_reading",
+            "placeholder_files", "duplicate_voice_declarations", "voice_indicators",
+            "voice_format", "voice_count", "missing_headers", "file_naming",
+            "header_consistency", "time_signature", "file_reading", "single_voice_files",
         ]
-        
         informational_categories = [
-            "percent_signs",
-            "tuplet_markers",
-            "single_voice_files", 
-        ]
+            "percent_signs", "tuplet_markers", "time_signature_indications",
+            "rscale_tokens",
+            ]
+
+        crit_total = sum(len(self.consistency_issues[c]) for c in critical_categories)
+        info_total = sum(len(self.consistency_issues[c]) for c in informational_categories)
+
+        # Critical section
+        print("─── CRITICAL ISSUES ───")
+        for cat in critical_categories:
+            issues = self.consistency_issues.get(cat, [])
+            name   = cat.replace("_", " ").title()
+            if issues:
+                print(f"\n{name} ({len(issues)})")
+                for i in issues[:MAX_EXAMPLES]:
+                    print(f"  • {i}")
+                more = len(issues) - MAX_EXAMPLES
+                if more > 0:
+                    print(f"  … +{more} more")
+            else:
+                print(f"{name}: 0 ✅")
+
+        # Informational section
+        print("\n─── INFORMATIONAL NOTICES ───")
+        for cat in informational_categories:
+            issues = self.consistency_issues.get(cat, [])
+            name   = cat.replace("_", " ").title()
+            if issues:
+                print(f"\n{name} ({len(issues)})")
+                for i in issues[:MAX_EXAMPLES]:
+                    print(f"  • {i}")
+                more = len(issues) - MAX_EXAMPLES
+                if more > 0:
+                    print(f"  … +{more} more")
+            else:
+                print(f"{name}: 0 ✅")
+
+        print("\n")
+        self.report_time_signatures()
+
+        # Summary
+        print("\n─── SUMMARY ───")
+        print(f"Critical issues:        {crit_total}")
+        print(f"Informational notices:  {info_total}")
+        print(f"Total files checked:    {len(self.all_files)}")
+        print(f"Invalid (critical‑fail):{len(self.critical_failures)}")
+        print(f"Valid files:            {len(self.valid_files)}")
+
+
+    def report_time_signatures(self):
+        """Generate a specialized report of time signature usage with mensuration information."""
+        time_sigs = self.get_time_signature_counts()
         
-        # Check if there are any issues at all
-        if not any(self.consistency_issues.values()):
-            print("✅ No consistency issues found!")
+        if not hasattr(self, 'mensuration_counts'):
+            # Ensure mensuration data is collected
+            self.check_time_signature_indications(list(self.valid_files))
+        
+        if not time_sigs:
+            print("No time signatures found.")
             return
         
-        # Count total issues for the summary
-        critical_issue_count = sum(len(self.consistency_issues[cat]) for cat in critical_categories)
-        informational_issue_count = sum(len(self.consistency_issues[cat]) for cat in informational_categories)
+        # Report on position statistics
+        total_positions = sum(self.mensuration_position.values())
+        if total_positions > 0:
+            print("\n--- Mensuration Position Relative to Time Signatures ---")
+            print(f"Before only: {self.mensuration_position['before']} ({self.mensuration_position['before']/total_positions*100:.1f}%)")
+            print(f"After only:  {self.mensuration_position['after']} ({self.mensuration_position['after']/total_positions*100:.1f}%)")
+            print(f"Both:        {self.mensuration_position['both']} ({self.mensuration_position['both']/total_positions*100:.1f}%)")
+            print(f"None:        {self.mensuration_position['none']} ({self.mensuration_position['none']/total_positions*100:.1f}%)")
         
-        # Report critical issues
-        print("\n=== CRITICAL ISSUES ===")
-        has_critical_issues = False
+        # Sort signatures by frequency for reporting
+        sorted_sigs = sorted(time_sigs.items(), key=lambda x: (-x[1], x[0]))
         
-        for check_type in critical_categories:
-            issues = self.consistency_issues.get(check_type, [])
-            if issues:
-                has_critical_issues = True
-                print(f"\n--- {check_type.replace('_', ' ').title()} ({len(issues)} issues) ---")
-                for issue in issues[:MAX_EXAMPLES]:
-                    print(f"  • {issue}")
-                
-                if len(issues) > MAX_EXAMPLES:
-                    print(f"  ... and {len(issues) - MAX_EXAMPLES} more issues")
+        # Calculate column widths
+        max_sig_width = max(len(sig) for sig in time_sigs.keys())
+        max_count_width = max(len(str(count)) for count in time_sigs.values())
+        
+        # Print header
+        pad_time_sig_column_len = 5
+        print(f"\n{'Time Signature':<{max_sig_width+2}} | {'Count':<{max_count_width+2}} | {'%':<5} | {'Common Mensurations'}")
+        print(f"{'-'*(max_sig_width+2) + '-'*pad_time_sig_column_len}-+-{'-'*(max_count_width+2)}-+-------+----------------")
+        
+        # Print rows
+        total_occurrences = sum(time_sigs.values())
+        for sig, count in sorted_sigs:
+            percentage = (count / total_occurrences) * 100
+            
+            # Get associated mensurations
+            paired_mensurations = self.ts_mensuration_pairs.get(sig, {})
+            if paired_mensurations:
+                # Clean and aggregate mensuration tokens by removing position indicators and prefixes
+                clean_paired = defaultdict(int)
+                for token, mensuration_count in paired_mensurations.items():
+                    # Remove the position indicator "(before)" or "(after)"
+                    clean_token = token.split(" (")[0]
+                    # Remove "*met" prefix to save space
+                    if clean_token.startswith("*met"):
+                        clean_token = clean_token[4:]
+                    clean_paired[clean_token] += mensuration_count
+                    
+                # Sort by frequency (highest first) and create comma-separated text of ALL mensurations
+                sorted_mens = sorted(clean_paired.items(), key=lambda x: (-x[1], x[0]))
+                mensuration_text = ", ".join([f"{m}({c})" for m, c in sorted_mens])
             else:
-                # Report zero issues for all check types
-                check_name = check_type.replace('_', ' ').title()
-                print(f"--- {check_name} (0 issues) ✅ ---")
-        
-        if not has_critical_issues:
-            print("✅ No critical issues found!")
-        
-        # Report informational issues
-        print("\n=== INFORMATIONAL NOTICES ===")
-        has_informational_issues = False
-        
-        for check_type in informational_categories:
-            issues = self.consistency_issues.get(check_type, [])
-            if issues:
-                has_informational_issues = True
-                print(f"\n--- {check_type.replace('_', ' ').title()} ({len(issues)} files) ---")
-                for issue in issues[:MAX_EXAMPLES]:
-                    print(f"  • {issue}")
+                mensuration_text = "None found"
                 
-                if len(issues) > MAX_EXAMPLES:
-                    print(f"  ... and {len(issues) - MAX_EXAMPLES} more files")
+            print(f"{sig:<{max_sig_width+2+pad_time_sig_column_len}} | {count:<{max_count_width+2}} | {percentage:5.1f}% | {mensuration_text}")
         
-        if not has_informational_issues:
-            print("✅ No informational notices found!")
+        # Also show mensuration statistics, grouping by base token without position info
+        if self.mensuration_counts:
+            print("\n--- Mensuration Indicators ---")
+            
+            # Clean up position information for display
+            clean_mensuration_counts = defaultdict(int)
+            for token, count in self.mensuration_counts.items():
+                # Clean token - remove "*met" prefix
+                clean_token = token
+                if clean_token.startswith("*met"):
+                    clean_token = clean_token[4:]
+                clean_mensuration_counts[clean_token] += count
                 
-        # Report complete summary count
-        print(f"\n=== SUMMARY ===")
-        print(f"• Critical issues requiring attention: {critical_issue_count}")
-        print(f"• Informational notices: {informational_issue_count}")
-        print(f"• Total files checked: {len(self.all_files)}")
-        print(f"• Invalid files (failed critical checks): {len(self.critical_failures)}")
-        print(f"• Valid files (passed critical checks): {len(self.valid_files)}")
-
+            sorted_mens = sorted(clean_mensuration_counts.items(), key=lambda x: (-x[1], x[0]))
+            
+            max_men_width = max(len(m) for m in clean_mensuration_counts.keys())
+            print(f"{'Mensuration':<{max_men_width+2}} | {'Count':<{max_count_width+2}} | {'%':<5}")
+            print(f"{'-'*(max_men_width+2)}-+-{'-'*(max_count_width+2)}-+------")
+            
+            total_mens = sum(clean_mensuration_counts.values())
+            for men, count in sorted_mens:
+                percentage = (count / total_mens) * 100
+                print(f"{men:<{max_men_width+2}} | {count:<{max_count_width+2}} | {percentage:5.1f}%")
+        
+        print("\nTime signatures as a set:")
+        print(f"[{', '.join(repr(sig) for sig, _ in sorted_sigs)}]")
+        
+        if self.mensuration_counts:
+            print("\nMensuration indicators as a set:")
+            # Clean tokens for set representation
+            clean_tokens = set()
+            for token in self.mensuration_counts.keys():
+                clean_token = token
+                if clean_token.startswith("*met"):
+                    clean_token = clean_token[4:]
+                clean_tokens.add(clean_token)
+            print(f"[{', '.join(repr(token) for token in sorted(clean_tokens))}]")
+    
+# ═════════════════════════════════ ═ CLI ═ ═══════════════════════════════════════
 def main():
-    parser = argparse.ArgumentParser(description='Check consistency of CounterpointConsensus dataset')
-    parser.add_argument('--path', help=f'Path to dataset directory (default: {DATASET_PATH})')
-    parser.add_argument('--output', help='Output path for valid/invalid file lists')
-    args = parser.parse_args()
-    
-    # Use the specified path or default path
-    if args.path:
-        dataset_path = args.path
+    # --- REMOVE argparse and CLI parsing ---
+    # parser = argparse.ArgumentParser(description="Consistency checker for CounterpointConsensus")
+    # parser.add_argument("--path", help=f"Dataset path (default {DATASET_PATH})")
+    # parser.add_argument("--output", help="Directory to write valid/invalid lists")
+    # args = parser.parse_args()
+
+    # --- Hardcode dataset path logic (use DATASET_PATH or fallback to TEST_DIR) ---
+    def has_kerns(p):
+        return any(f.endswith(".krn") for f in os.listdir(p)) or \
+               any(f.endswith(".krn") for _, _, fs in os.walk(p) for f in fs)
+    if os.path.isdir(DATASET_PATH) and has_kerns(DATASET_PATH):
+        dataset_path = DATASET_PATH
+        print(f"Using default dataset path {dataset_path}")
     else:
-        # Check if the default path exists and has .krn files
-        if os.path.exists(DATASET_PATH) and os.path.isdir(DATASET_PATH):
-            try:
-                # Check if there are any .krn files in this directory (or subdirectories)
-                has_kern_files = any(f.endswith('.krn') for f in os.listdir(DATASET_PATH)) or \
-                                any(f.endswith('.krn') for path, _, files in os.walk(DATASET_PATH) for f in files)
-                if has_kern_files:
-                    dataset_path = DATASET_PATH
-                    print(f"Using default dataset path: {dataset_path}")
-                else:
-                    # No .krn files in default path, try test directory
-                    dataset_path = TEST_DIR
-                    print(f"No .krn files found in default path, using test directory: {dataset_path}")
-            except Exception:
-                # If there's any error accessing the default path, fall back to test directory
-                dataset_path = TEST_DIR
-                print(f"Error accessing default path, using test directory: {dataset_path}")
-        else:
-            # Default path doesn't exist, use test directory
-            dataset_path = TEST_DIR
-            print(f"Default path doesn't exist, using test directory: {dataset_path}")
-    
-    print()
-    print(f"Checking dataset at: {dataset_path}")
+        dataset_path = TEST_DIR
+        print(f"Default path lacks .krn files – using {dataset_path}")
+
+    print(f"\nChecking dataset at {dataset_path}\n")
     checker = ConsistencyChecker(dataset_path)
-    issues, valid_files, invalid_files = checker.run_all_checks()
+    issues, valid_files_set, critical_failures_dict = checker.run_all_checks()
     checker.generate_report()
-    
-    # Optionally output valid and invalid file lists
-    if args.output:
-        valid_path = os.path.join(args.output, "valid_files.txt")
-        invalid_path = os.path.join(args.output, "invalid_files.txt")
-        
-        with open(valid_path, 'w') as f:
-            for file_path in checker.get_valid_files():
-                f.write(f"{file_path}\n")
-                
-        with open(invalid_path, 'w') as f:
-            for file_path in checker.get_invalid_files():
-                f.write(f"{file_path}\n")
-                
-        print(f"Valid files list written to: {valid_path}")
-        print(f"Invalid files list written to: {invalid_path}")
+
+    # --- Supply a list of externally invalid JRP-IDs ---
+    # Example: supply your own list here
+    externally_invalid_jrpids = [
+        "Oke1013e", "Jos0603a", 
+    ]
+
+    # --- Print valid and invalid file lists ---
+    valid_files_list = checker.get_valid_files()
+    invalid_files_list = checker.get_invalid_files()
+    PRINT_VALID_FLAG = False
+
+    # --- Collect JRP-IDs from invalid files ---
+    invalid_ids = set()
+    if invalid_files_list:
+        for file_path in invalid_files_list:
+            filename = os.path.basename(file_path)
+            jrpid = filename.split('-', 1)[0]
+            invalid_ids.add(jrpid)
+
+    # --- Merge with externally supplied invalid JRP-IDs ---
+    invalid_ids.update(externally_invalid_jrpids)
+
+    # --- Remove any now-invalid files from the valid list ---
+    filtered_valid_files_list = [
+        fp for fp in valid_files_list
+        if os.path.basename(fp).split('-', 1)[0] not in invalid_ids
+    ]
+
+    print(f"\n--- Valid Files (JRP-IDs) ---")
+    if PRINT_VALID_FLAG:
+        if filtered_valid_files_list:
+            valid_ids = set()
+            for file_path in filtered_valid_files_list:
+                filename = os.path.basename(file_path)
+                jrpid = filename.split('-', 1)[0]
+                valid_ids.add(jrpid)
+            sorted_valid_ids = sorted(list(valid_ids))
+            print(sorted_valid_ids)
+        else:
+            print("[] # No files passed all critical checks.")
+
+    print(f"\n--- Invalid Files (JRP-IDs); {len(invalid_ids)} files ---")
+    sorted_invalid_ids = sorted(list(invalid_ids))
+    print(sorted_invalid_ids)   
 
 if __name__ == "__main__":
     main()
