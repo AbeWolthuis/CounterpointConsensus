@@ -13,6 +13,7 @@ def violations_to_df(violations: Dict[str, List[RuleViolation]], metadata) -> pd
     violation_counts = feature_counts(violations)
     # Add the composer from metadata (defaulting to "Unknown" if not present)
     composer = metadata.get("COM", "Unknown")
+    # Add the composer to the violation_counts dictionary
     violation_counts["composer"] = composer
 
     # Create df (with dict keys as columns), and set composer as last column
@@ -23,6 +24,11 @@ def violations_to_df(violations: Dict[str, List[RuleViolation]], metadata) -> pd
     return df
 
 def feature_counts(violations: Dict[str, List[RuleViolation]]) -> Dict[str, int]:
+    '''
+        keys: rule names (e.g., "Parallel_fifths", "Uncompensated_leap")
+        values: number of violations for each rule
+        e.g., {"Parallel_fifths": 2, "Uncompensated_leap": 3} 
+    '''
     counts = {rule: len(violation_list) for rule, violation_list in violations.items()}
     return counts
 

@@ -43,22 +43,28 @@ class FloatTruncator:
 
 
 class SalamiSlice(FloatTruncator):
-    def __init__(self, offset=-1, beat=-1, num_voices=-1, bar=-1, ) -> None:
+    def __init__(self, offset=-1, beat=-1, num_voices=-1, bar=-1, original_line_number=-1) -> None:
         self.offset = offset
         self.beat = beat  # Position in bar in musical beats
         self.num_voices = num_voices
-        self.notes = [None] * num_voices
+        self.notes: list[Note|None] = [None] * num_voices
         self.bar = bar
 
         self.absolute_intervals = None # Will be: Dict[Tuple[int, int], int]
         self.reduced_intervals = None # Will be: Dict[Tuple[int, int], int]
 
+        # Record original line number in the source file
+        self.original_line_number = original_line_number
+
         
         # Link each voice to a difference slice
-        self.next_new_occurence_per_voice = [None] * num_voices
+        self.next_new_occurrence_per_voice: list[SalamiSlice|None] = [None] * num_voices
+        self.next_any_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
+        self.next_rest_per_voice: list[SalamiSlice|None] = [None] * num_voices
 
-        self.next_note_per_voice = [None] * num_voices
-        self.previous_note_per_voice = [None] * num_voices
+        self.previous_new_occurrence_per_voice: list[SalamiSlice|None] = [None] * num_voices
+        self.previous_any_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
+        self.previous_rest_per_voice: list[SalamiSlice|None] = [None] * num_voices
 
     def add_note(self, note, voice):
         if voice >= self.num_voices:
@@ -105,8 +111,12 @@ class SalamiSlice(FloatTruncator):
     def __repr__(self):
         # Show both offset and beat in the representation
         offset_str = f"offset={self.truncated_offset_as_str}, beat={self.truncated_beat_as_str}, bar={self.bar}, "
+        padding_needed = max(0, 30 - len(offset_str))  # Calculate how many spaces are needed
+        padded_offset_str = offset_str + " " * padding_needed  # Add the required spacespadded_offset_str = f"{self.truncated_offset_as_str:<30}"
+        
         notes_str = "[" + ", ".join([str(note) for note in self.notes]) + "]"
-        return f"{offset_str}{notes_str}\n"
+        
+        return f"{padded_offset_str}{notes_str}\n"
 
 
 
@@ -119,13 +129,26 @@ class Note(FloatTruncator):
     midi_to_pitch = MIDI_TO_PITCH
     pitch_to_midi = PITCH_TO_MIDI
 
+    __slots__ = (
+        'midi_pitch',
+        'duration',
+        'bar',
+        'is_tied',
+        'is_tie_start',
+        'is_tie_end',
+        'note_type',
+        'is_new_occurrence', 
+        'is_triplet',
+        'is_longa'
+    )
+
     def __init__(self, 
                 # Pitch
                 midi_pitch: int = -1,
 
                 # Rhythm
                 duration: float = -1,
-                bar: int = -1,
+                bar: int = -1,          # Only used for barlines. Otherwise, the slice has the bar information.
                 
                 # New tie fields:
                 is_tied: bool = False,
@@ -150,15 +173,19 @@ class Note(FloatTruncator):
         self.is_tie_end = is_tie_end   
         # Note quality
         self.note_type = note_type
-        self.new_occurrence = new_occurence
+        self.is_new_occurrence = new_occurence
         self.is_triplet = is_triplet  
         self.is_longa = is_longa
 
         return
     
     def __repr__(self):
-        if self.note_type == 'note':
-            return f"({self.note_type}: {self.truncated_duration_as_str}, {self.note_name})"
+        if self.note_type == 'note':    
+            tie_repr = self.tie_repr
+            if tie_repr:
+                return f"({self.note_type}: {self.truncated_duration_as_str}, {self.note_name}, {self.tie_repr})"
+            else:
+                return f"({self.note_type}: {self.truncated_duration_as_str}, {self.note_name})"
         else:
             return f"({self.note_type}: {self.truncated_duration_as_str})"
         
@@ -173,9 +200,22 @@ class Note(FloatTruncator):
     def note_name(self) -> Union[str, None]:
         """Get the note name of the note."""
         if self.midi_pitch == -1:
-            return None
+            return self.note_type
         return self.midi_to_pitch[self.midi_pitch]
     
+    @property
+    def tie_repr(self) -> str:
+        """Get a string representation of the tie status."""
+        if self.is_tied:
+            if self.is_tie_start:
+                return "tie start"
+            elif self.is_tie_end:
+                return "tie end"
+            else:
+                return "tie mid"
+        else:
+            return ""
+
     @property
     def compact_summary(self) -> str:
         """Get a compact summary of the note."""
