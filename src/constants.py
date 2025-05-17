@@ -22,6 +22,20 @@ TIME_SIGNATURE_NORMALIZATION_MAP = {
     4: 1,
     8: 0.5,
 }
+REDUCED_INTERVAL_CONSONANCE_MAP = {
+    0: True,  # Unison
+    1: False, # Minor 2nd
+    2: False, # Major 2nd
+    3: True,  # Minor 3rd
+    4: True,  # Major 3rd
+    5: False, # Perfect 4th
+    6: False, # Augmented 4th / dimished 5th
+    7: True,  # Perfect 5th
+    8: True,  # Minor 6th
+    9: True,  # Major 6th
+    10: False, # Minor 7th
+    11: False, # Major 7th
+}
 
 
 PITCH_TO_MIDI = {

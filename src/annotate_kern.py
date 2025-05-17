@@ -6,7 +6,7 @@ from counterpoint_rules import RuleViolation
 
 
 def annotate_all_kern(kern_filepaths: list[str], destination_dir: str, all_metadata: dict[str, dict], all_violations: dict[str, list[RuleViolation]],
-                        overwrite: bool = True, maintain_jrp_structure: bool = True, verbose: bool = False,) -> None:
+                        use_rule_ids: bool = True, overwrite: bool = True, maintain_jrp_structure: bool = True, verbose: bool = False,) -> None:
     """Annotate all kern files in the given list of file paths.
 
     Args:
@@ -43,16 +43,18 @@ def annotate_all_kern(kern_filepaths: list[str], destination_dir: str, all_metad
         violations = all_violations[jrpid]
 
         # Annotate a copy of the .krn source with comments for each violation
-        annotate_kern(src_path, dst_path, violations, metadata, overwrite=overwrite, verbose=verbose)
+        annotate_kern(src_path, dst_path, violations, metadata, 
+                      use_rule_ids=use_rule_ids, overwrite=overwrite, verbose=verbose)
 
         if verbose:
             print(f"Annotated {jrpid} and saved to {dst_path}")
 
 
-def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict, overwrite: bool, verbose: bool) -> None:
+def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict, 
+                  use_rule_ids: bool, overwrite: bool, verbose: bool) -> None:
     """
     Inserts comment lines above each line in the .krn file that has a violation.
-    Each violation includes the line index ("original_line_number"), voice(s),
+    Each violation includes the line index ("original_line_num"), voice(s),
     and rule_name(s). 
     
     Format:
@@ -61,7 +63,7 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
     <original line from source file>
     *  *color:black  *   *                       (reset color directive line)
     
-    '*' denotes no change for that voice. Each token is separated by a tab.
+    '*' for the color, and '!' for the comment, denotes no change for that voice. Each token is separated by a tab.
     """
     # Check if file exists and respect overwrite preference
     if os.path.exists(dst_path) and not overwrite:
@@ -69,7 +71,8 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
             print(f"Skipping {dst_path}: File exists and overwrite=False")
         return
     
-    # Create a mapping of line numbers to rule names for each voice
+    # Create a mapping of line numbers to RuleViolation objects for each voice.
+    # This will look like: {line_num: {voice_index: [RuleViolation, RuleViolation, ...]}}
     violations_to_line_voice_map = defaultdict(lambda: defaultdict(list))
     voice_sort_map = metadata['voice_sort_map']
     reverse_voice_map = {v:k for k,v in voice_sort_map.items()}
@@ -77,31 +80,37 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
     # Populate violations_to_line_voice_map
     for rule_name, rule_violations in violations.items():
         for v in rule_violations:
-            line_num = v.original_line_number
+            line_num = v.original_line_num
 
             # voice_indices can be a single int or a tuple
             if isinstance(v.voice_indices, tuple):
-                for voice in v.voice_indices:
-                    original_voice = reverse_voice_map[voice]
-                    violations_to_line_voice_map[line_num][original_voice].append(rule_name)
+                for voice_idx_from_violation in v.voice_indices:
+                    original_voice_mapped_idx = reverse_voice_map[voice_idx_from_violation]
+                    violations_to_line_voice_map[line_num][original_voice_mapped_idx].append(v) # Store the RuleViolation object
             else:
-                original_voice = reverse_voice_map[v.voice_indices]
-                violations_to_line_voice_map[line_num][original_voice].append(rule_name)
+                original_voice_mapped_idx = reverse_voice_map[v.voice_indices]
+                violations_to_line_voice_map[line_num][original_voice_mapped_idx].append(v) # Store the RuleViolation object
 
     # Go line-by-line, writing both comment lines and the original line
     with open(src_path, "r", encoding="utf-8") as fin, open(dst_path, "w", encoding="utf-8") as fout:
-        for i, line in enumerate(fin):
+        for line_idx, line in enumerate(fin):
             # Check if there are violations for this line
-            if i in violations_to_line_voice_map:
-                # Create the text annotation line with rule names
-                comment_tokens = ["!"] * len(voice_sort_map)
+            if line_idx in violations_to_line_voice_map:
+                # Create the text annotation line
+                comment_tokens = ["!"] * len(voice_sort_map) # Use '*' as default for interpretation lines
+                # Track which voices have violations, to color only those voices red
                 voices_with_violations = set()
-                
-                for voice_idx, rule_names in violations_to_line_voice_map[i].items():
-                    # Use set to avoid duplicates
-                    unique_rule_names = sorted(set(rule_names))
-                    rule_names_str = ", ".join(unique_rule_names)
-                    comment_tokens[voice_idx] = f"!LO:TX:a:t={rule_names_str}"
+
+                for voice_idx, stored_violation_object in violations_to_line_voice_map[line_idx].items():
+                    descriptions_for_this_voice = []
+                    for v_obj in stored_violation_object: # v_obj is a RuleViolation object
+                        if use_rule_ids:
+                            descriptions_for_this_voice.append(str(v_obj.rule_id))
+                        else:
+                            descriptions_for_this_voice.append(v_obj.rule_name)
+                    
+                    descriptions_str = ", ".join(descriptions_for_this_voice)
+                    comment_tokens[voice_idx] = f"!LO:TX:a:t={descriptions_str}"
                     voices_with_violations.add(voice_idx)
 
                 # Create the color directive line (set affected voices to red)

@@ -137,35 +137,45 @@ def plot_slice_distribution(df):
     if df.empty:
         print("DataFrame is empty. Cannot generate plot.")
         return
+    
+    # --- New: a single, consistent composer order ---
+    composer_order = sorted(df['composer'].unique())
+    if 'Jos' in composer_order:
+        composer_order.remove('Jos')
+        composer_order.insert(0, 'Jos')
 
     # Create a figure with a 2x2 grid of subplots
     fig, axs = plt.subplots(2, 2, figsize=(20, 16)) # Adjusted figure size for 2x2
 
-    # --- Determine Color Order based on Piece Count ---
-    # Calculate piece counts and sort composers by count (descending)
-    composer_counts = df['composer'].value_counts().sort_values(ascending=False)
-    composers_sorted_by_count = composer_counts.index.tolist()
-
     # Create a consistent color map based on piece count frequency for composer-level plots
-    composer_colors = dict(zip(composers_sorted_by_count, sns.color_palette('pastel', n_colors=len(composers_sorted_by_count))))
-
-    # Get composers sorted alphabetically for consistent x-axis ordering in some plots
-    sorted_composers_alpha = sorted(df['composer'].unique())
-
+    composer_colors = dict(zip(composer_order, sns.color_palette('pastel', n_colors=len(composer_order))))
 
     # --- Bar Graph - Piece Count (Top-Left) ---
-    sns.barplot(ax=axs[0, 0], x=composer_counts.index, y=composer_counts.values, palette=composer_colors, order=composers_sorted_by_count)
+    composer_counts = df['composer'].value_counts().reindex(composer_order, fill_value=0)
+    sns.barplot(
+        ax=axs[0, 0],
+        x=composer_counts.index,
+        y=composer_counts.values,
+        palette=composer_colors,
+        order=composer_order
+    )
     axs[0, 0].set_title('Number of Pieces per Composer')
-    axs[0, 0].set_xlabel(None) # Remove x-label
-    axs[0, 0].set_ylabel(None) # Remove y-label
     axs[0, 0].tick_params(axis='x', rotation=45)
 
     # --- Bar Graph - Mean Slice Count (Top-Right) ---
-    mean_slice_counts = df.groupby('composer')['slice_count'].mean().sort_index() # Group, mean, sort alphabetically
-    sns.barplot(ax=axs[0, 1], x=mean_slice_counts.index, y=mean_slice_counts.values, palette=composer_colors, order=sorted_composers_alpha) # Order alphabetically for x-axis
+    mean_slices = (
+        df.groupby('composer')['slice_count']
+          .mean()
+          .reindex(composer_order)
+    )
+    sns.barplot(
+        ax=axs[0, 1],
+        x=mean_slices.index,
+        y=mean_slices.values,
+        palette=composer_colors,
+        order=composer_order
+    )
     axs[0, 1].set_title('Mean Slice Count per Composer')
-    axs[0, 1].set_xlabel(None) # Remove x-label
-    axs[0, 1].set_ylabel(None) # Remove y-label
     axs[0, 1].tick_params(axis='x', rotation=45)
 
     # --- Heatmap - Voice Count Distribution (Bottom-Left) ---
@@ -181,60 +191,47 @@ def plot_slice_distribution(df):
 
     voice_composer_counts = (
         df_heat.groupby(['voice_count_binned', 'composer'])
-        .size()
-        .unstack(fill_value=0)
-        .reindex(index=y_order)
-    )
+               .size()
+               .unstack(fill_value=0)
+    ).reindex(index=y_order, columns=composer_order, fill_value=0)
 
-    
+    # --- Heatmap - Voice Count Distribution as % per Composer (Bottom-Left) ---
+    # Compute column‐wise percentages
+    voice_composer_pct = voice_composer_counts.div(voice_composer_counts.sum(axis=0), axis=1) * 100
 
-    # Prepare annotation matrix: show count except for zeros (show empty string)
-    annot_matrix = voice_composer_counts.astype(str)
-    annot_matrix[voice_composer_counts == 0] = ""
+    # Prepare annotation matrix: show “xx.x%”. Note: not used right now, but used in the future.
+    annot_matrix_pct = voice_composer_pct.round(1).astype(str) + '%'
+    # Blank out zero‐percent cells
+    annot_matrix_pct[voice_composer_pct == 0] = ""
 
-    vmax = voice_composer_counts.values.max() if voice_composer_counts.values.max() > 1 else 2
-
-    # Use viridis colormap, but set the first color (for 0) to the lowest color in the colormap (not white)
-    base_cmap = plt.get_cmap("viridis")
-    colors = [base_cmap(0.0)] + [base_cmap(i) for i in np.linspace(0, 1, 255)[1:]]
-    cmap = ListedColormap(colors)
-
-    
+    # Use a linear viridis palette
+    cmap = plt.get_cmap("viridis")
 
     hm = sns.heatmap(
-        voice_composer_counts,
+        voice_composer_pct,
         ax=axs[1, 0],
         cmap=cmap,
-        annot=annot_matrix,
+        annot=False,
         fmt="s",
-        cbar_kws={},
-        norm=ZeroLogNorm(vmin=1, vmax=vmax)
+        cbar_kws={'label': 'Percent of Pieces'},
+        vmin=0,
+        vmax=100
     )
-    axs[1, 0].set_title('Voice Count Distribution per Composer')
-    axs[1, 0].set_xlabel(None)  # Remove x-label
-    axs[1, 0].set_ylabel(None)  # Remove y-label
+
+    axs[1, 0].set_title('Voice Count Distribution per Composer (%)')
+    axs[1, 0].set_xlabel(None)
+    axs[1, 0].set_ylabel(None)
     axs[1, 0].tick_params(axis='x', rotation=45)
-    axs[1, 0].invert_yaxis()  # So that 2 is at the bottom
+    axs[1, 0].invert_yaxis()
 
-    # Set colorbar ticks to 1, 10, 100, and max (if distinct)
+    # Adjust colorbar ticks
     cbar = hm.collections[0].colorbar
-    cbar.set_label('')  # Remove colorbar label
-
-    # Set colorbar ticks to 1, 10, 100, and max (if distinct)
-    import matplotlib.ticker as mticker
-    ticks = [1, 3, 10, 33, 100]
-    if vmax not in ticks:
-        ticks.append(vmax)
-    ticks = [t for t in ticks if t <= vmax]
-    ticks = sorted(set(ticks))
-    cbar.set_ticks(ticks)
-    cbar.set_ticklabels([str(t) for t in ticks])
-    cbar.ax.yaxis.set_major_formatter(mticker.ScalarFormatter())
-    cbar.ax.yaxis.get_offset_text().set_visible(False)
+    cbar.set_ticks([0, 25, 50, 75, 100])
+    cbar.set_ticklabels(['0%', '25%', '50%', '75%', '100%'])
 
     # --- Violin Plot - Slice Count (Bottom-Right) ---
     # Plot ordered alphabetically, but colored by frequency map
-    sns.violinplot(ax=axs[1, 1], x='composer', y='slice_count', data=df, palette=composer_colors, inner='quartile', order=sorted_composers_alpha) # Use original df
+    sns.violinplot(ax=axs[1, 1], x='composer', y='slice_count', data=df, palette=composer_colors, inner='quartile', order=composer_order) # Use original df
     axs[1, 1].set_title('Distribution of Slice Counts per Composer') # Updated title
     axs[1, 1].set_xlabel(None) # Remove x-label
     axs[1, 1].set_ylabel(None) # Remove y-label explicitly
@@ -259,13 +256,21 @@ if __name__ == '__main__':
     manual_invalid_files = [
         'Jos0603a',
     ]
-    invalid_files = invalid_files.extend(manual_invalid_files)
+    invalid_files.extend(manual_invalid_files)
 
     # Example usage:
     df = jrp_data_eda(DATASET_PATH, valid_files=valid_files, invalid_files=invalid_files, ano_mode='skip')
+    # Sort df by voice_count
+    df = df.sort_values(by='slice_count', ascending=True)
+    print(df[0:20])
     
     print(f"Total number of pieces loaded: {len(df)}") # Print total piece count
+    total_pieces = len(df)
+    two_voice_pieces = len(df[df['voice_count'] == 2])
+    percentage = (two_voice_pieces / total_pieces * 100) if total_pieces else 0
+    print(f"Total number of pieces with two voices: {two_voice_pieces}, which is {percentage:.2f}% of the total.")
     print(df.describe())
+
     # Plot the distribution
     plot_slice_distribution(df)
 

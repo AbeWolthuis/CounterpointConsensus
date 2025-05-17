@@ -1,7 +1,7 @@
 from Note import Note, SalamiSlice
 from counterpoint_rules import CounterpointRules
 
-from constants import DURATION_MAP, INFINITY_BAR
+from constants import DURATION_MAP, INFINITY_BAR, REDUCED_INTERVAL_CONSONANCE_MAP
 from constants import FLOAT_TRUNCATION_DIGITS, BEAT_GRID_DIVISIONS
 
 DEBUG2 = False
@@ -14,20 +14,25 @@ def post_process_salami_slices(salami_slices: list[SalamiSlice],
                                metadata, expand_metadata_flag=True) -> tuple[list[SalamiSlice], dict[str, any]]:
     """ Post-process the salami slices.  """
     # Note, most of this could be done in one pass, but for developmental ease we do it in multiple passes.
-    salami_slices, metadata = order_voices(salami_slices, metadata)
-    salami_slices = remove_barline_slice(salami_slices, metadata)
+    salami_slices, metadata = order_voices(salami_slices, metadata) 
+    salami_slices = set_voice_in_notes(salami_slices) # Set the voice in the notes (can bemerged into order_voices function)
+    salami_slices = remove_barline_slice(salami_slices)
 
+    # Handle new occurences and ties
     salami_slices = set_period_notes(salami_slices)
     salami_slices = set_tied_notes_new_occurences(salami_slices)
     
-    
-
-    
-    salami_slices = set_interval_property(salami_slices)
+    # Handle rhythmic properties
     salami_slices = calculate_offsets(salami_slices)  # Calculate raw offsets from bar start
     salami_slices = calculate_beat_positions(salami_slices, metadata)  # Convert offsets to beats
 
-    salami_slices = link_salami_slices(salami_slices, metadata)
+    # Calculate harmonic properties
+    salami_slices = set_interval_property(salami_slices)
+    salami_slices = set_chordal_properties(salami_slices) 
+
+
+
+    salami_slices = link_salami_slices(salami_slices)
 
 
     # Expand metadata to be per bar
@@ -35,17 +40,19 @@ def post_process_salami_slices(salami_slices: list[SalamiSlice],
     
     return salami_slices, metadata
 
-def remove_barline_slice(salami_slices: list[SalamiSlice], metadata: dict[str, any]) -> tuple[list[SalamiSlice], dict[str, any]]:
+def remove_barline_slice(salami_slices: list[SalamiSlice]) -> tuple[list[SalamiSlice], dict[str, any]]:
     """ Remove all barline slices. """
-    salami_slices = [salami_slice for salami_slice in salami_slices if salami_slice.notes[0].note_type != 'barline']
+    salami_slices = [salami_slice for salami_slice in salami_slices if salami_slice.notes[0].note_type not in ['barline', 'final_barline']]
     return salami_slices
 
-def set_interval_property(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
-    """ Set the intervals in the salami slices """
-    for i, salami_slice in enumerate(salami_slices):
-        salami_slice.absolute_intervals = salami_slice._calculate_intervals()
-        salami_slice.reduced_intervals = salami_slice._calculate_reduced_intervals()
+def set_voice_in_notes(salami_slices: list[SalamiSlice]) -> tuple[list[SalamiSlice], dict[str, any]]:
+    """ Set the voice in the notes. This function should be called after the notes (voices) are sorted. """
+    for salami_slice in salami_slices:
+        for voice_idx, note in enumerate(salami_slice.notes):
+            # Set the voice in the note
+            note.voice = voice_idx
     return salami_slices
+
 
 def set_period_notes(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
     """ Set the notes in the salami slices that are periods to the notes in the previous slice """
@@ -58,9 +65,13 @@ def set_period_notes(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
                 # Get the previous note as a reference
                 prev_note = salami_slices[i-1].notes[voice]
 
-                # Copy relevant properties
+                if prev_note.note_type == 'rest':
+                    a = 1
+                # Copy all of the properties to the period note
                 new_note = Note(
                     midi_pitch=prev_note.midi_pitch,
+                    octave=prev_note.octave,
+                    spelled_name=prev_note.spelled_name,
                     duration=prev_note.duration,
                     bar=prev_note.bar,
                     note_type=prev_note.note_type,  # Change from 'period' to 'note'
@@ -81,6 +92,9 @@ def set_tied_notes_new_occurences(salami_slices: list[SalamiSlice]) -> list[Sala
     """ Set the new occurrences of tied notes to False """
     for i, salami_slice in enumerate(salami_slices):
         for voice, note in enumerate(salami_slice.notes):
+            if note.note_type == 'rest':
+                # A rest is never tied, so we continue (the logic below does not handle this fact)
+                continue
             # If the note is a tie end, set the new occurrence to False
             if note.is_tie_end:
                 salami_slice.notes[voice].is_new_occurrence = False
@@ -94,6 +108,8 @@ def set_tied_notes_new_occurences(salami_slices: list[SalamiSlice]) -> list[Sala
                 raise ValueError(f"Note {note} in slice {i} is not a tie start, tie end or tied note")
             
     return salami_slices
+
+
 
 def order_voices(salami_slices: list[SalamiSlice], metadata: dict[str, any]) -> tuple[list[SalamiSlice], dict[str, any]]:
     """ Order the voices from low to high in the salami slices."""
@@ -289,17 +305,51 @@ def calculate_beat_positions(salami_slices: list[SalamiSlice], metadata) -> list
             
     return salami_slices
 
+def set_interval_property(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
+    """ Set the intervals in the salami slices """
+    for i, salami_slice in enumerate(salami_slices):
+        salami_slice.absolute_intervals = salami_slice._calculate_intervals()
+        salami_slice.reduced_intervals = salami_slice._calculate_reduced_intervals()
+    return salami_slices
 
-def link_salami_slices(salami_slices: list[SalamiSlice], metadata) -> list[SalamiSlice]:
+def set_chordal_properties(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
+    """ Set choral properties, using m21. This includes e.g. chord name, and consonance of notes."""
+    
+    # Calculates chord analysis for each slice and determines consonance/dissonance for each note.
+    for salami_slice in salami_slices:
+        # Calculate and store chord analysis for the slice
+        current_chord_analysis_data = salami_slice._calculate_chord_analysis()
+        salami_slice.chord_analysis = current_chord_analysis_data
+
+        # Calculate the interval of each note to the root of the chord.
+        # Set consonance/dissonance accordingly.
+        root_note_voice = current_chord_analysis_data['root_note_voice']
+        root_note = salami_slice.notes[root_note_voice]
+
+        for voice_idx, note in enumerate(salami_slice.notes):
+            interval_to_root = salami_slice.reduced_intervals[(root_note_voice, voice_idx)]
+            note.is_consonance = REDUCED_INTERVAL_CONSONANCE_MAP[interval_to_root]
+            raise NotImplementedError("TODO: implement the note relation to root")
+
+
+
+    return salami_slices
+
+def determine_note_relation_to_root
+
+
+def link_salami_slices(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
     """ Link each slice to the next and previous slices containing notes or new occurrences for each voice. """
     num_slices = len(salami_slices)
 
     # --- Link forwards ---
     for i, cur_slice in enumerate(salami_slices):
         for voice_idx, _ in enumerate(cur_slice.notes):
-            # Find the next slice containing *any* note and the next slice containing a *new occurrence* note
-            next_slice_with_any_note = None         # Will store the slice with the *immediately* following note
-            next_slice_with_new_occurrence = None   # Will store the slice with the following *new occurrence* note
+            # Find the next slice containing *any* note, the next slice containing a *new occurrence* note,
+            # and the next slice containing a *rest* for this voice
+            next_slice_with_any_new_occ = None    # Will store the slice with whatever the next note (e.g. rest or note) is
+            next_slice_with_note_new_occ = None   # Will store the slice with the following *new occurrence* note
+            next_slice_with_rest_new_occ = None   # Will store the slice with the following *rest*
 
             # Loop forwards from the slice after the current slice
             for j in range(i + 1, num_slices):
@@ -309,34 +359,39 @@ def link_salami_slices(salami_slices: list[SalamiSlice], metadata) -> list[Salam
 
                 # Check if it's a musical note (not rest, barline, etc.)
                 is_musical_note = (note_in_next_slice.note_type == 'note')
+                is_rest = (note_in_next_slice.note_type == 'rest')
 
-                # If we haven't found the immediately following musical note's slice yet,
-                # and this slice contains a musical note, store this slice.
-                if not next_slice_with_any_note and is_musical_note:
-                    next_slice_with_any_note = next_slice_candidate
+                # Store any next new occurrence (rest or note).
+                if not next_slice_with_any_new_occ and note_in_next_slice.is_new_occurrence:
+                    next_slice_with_any_new_occ = next_slice_candidate
 
                 # If we haven't found the following *new occurrence* note's slice yet,
                 # and this slice contains a new occurrence note, store this slice.
-                if not next_slice_with_new_occurrence and is_musical_note and note_in_next_slice.is_new_occurrence:
-                    next_slice_with_new_occurrence = next_slice_candidate
+                if not next_slice_with_note_new_occ and is_musical_note and note_in_next_slice.is_new_occurrence:
+                    next_slice_with_note_new_occ = next_slice_candidate
+                    
+                # If we haven't found the following *rest* yet, and this slice contains a rest, 
+                # and slice is the first slice of the rest (new occurrence), store this slice.
+                if not next_slice_with_rest_new_occ and is_rest and note_in_next_slice.is_new_occurrence:
+                    next_slice_with_rest_new_occ = next_slice_candidate
 
-                # Optimization: If we've found both target slices, we can stop searching forwards.
-                if next_slice_with_any_note and next_slice_with_new_occurrence:
+                # Optimization: If we've found all target slices, we can stop searching forwards.
+                if next_slice_with_any_new_occ and next_slice_with_note_new_occ and next_slice_with_rest_new_occ:
                     break
 
             # Assign the found slices to the current slice's attributes
-            cur_slice.next_new_occurrence_per_voice[voice_idx] = next_slice_with_new_occurrence
-            cur_slice.next_any_note_per_voice[voice_idx] = next_slice_with_any_note
-
-    
-
+            cur_slice.next_note_per_voice[voice_idx] = next_slice_with_note_new_occ
+            cur_slice.next_any_note_per_voice[voice_idx] = next_slice_with_any_new_occ
+            cur_slice.next_rest_per_voice[voice_idx] = next_slice_with_rest_new_occ
 
     # --- Link backwards ---
     for idx, cur_slice in enumerate(salami_slices):
         for voice_idx, _ in enumerate(cur_slice.notes):
-            # Find the previous slice containing *any* note and the previous slice containing a *new occurrence* note
-            prev_slice_with_any_note = None         # Will store the slice with the *immediately* preceding note
-            prev_slice_with_new_occurrence = None   # Will store the slice with the preceding *new occurrence* note
+            # Find the previous slice containing *any* note, the previous slice containing a *new occurrence* note,
+            # and the previous slice containing a *rest* for this voice
+            prev_slice_with_any_new_occ = None       # Will store the slice with the *immediately* preceding note
+            prev_slice_with_note_new_occ = None      # Will store the slice with the preceding *new occurrence* note
+            prev_slice_with_rest_new_occ = None      # Will store the slice with the preceding *rest*
 
             # Loop backwards from the slice before the current slice
             for j in range(idx - 1, -1, -1):
@@ -346,24 +401,31 @@ def link_salami_slices(salami_slices: list[SalamiSlice], metadata) -> list[Salam
 
                 # Check if it's a musical note (not rest, barline, etc.)
                 is_musical_note = (note_in_prev_slice.note_type == 'note')
+                is_rest = (note_in_prev_slice.note_type == 'rest')
 
-                # If we haven't found the immediately previous musical note's slice yet,
-                # and this slice contains a musical note, store this slice.
-                if not prev_slice_with_any_note and is_musical_note:
-                    prev_slice_with_any_note = prev_slice_candidate
+                # Store any previous new occurrence (rest or note).
+                if not prev_slice_with_any_new_occ and note_in_prev_slice.is_new_occurrence:
+                    prev_slice_with_any_new_occ = prev_slice_candidate
 
                 # If we haven't found the previous *new occurrence* note's slice yet,
                 # and this slice contains a new occurrence note, store this slice.
-                if not prev_slice_with_new_occurrence and is_musical_note and note_in_prev_slice.is_new_occurrence:
-                    prev_slice_with_new_occurrence = prev_slice_candidate
+                if not prev_slice_with_note_new_occ and is_musical_note and note_in_prev_slice.is_new_occurrence:
+                    prev_slice_with_note_new_occ = prev_slice_candidate
+                    
+                # If we haven't found the previous *rest* yet,
+                # and this slice contains a rest, store this slice.
+                if not prev_slice_with_rest_new_occ and is_rest and note_in_prev_slice.is_new_occurrence:
+                    prev_slice_with_rest_new_occ = prev_slice_candidate
 
-                # Optimization: If we've found both target slices, we can stop searching backwards.
-                if prev_slice_with_any_note and prev_slice_with_new_occurrence:
+                # Optimization: If we've found all target slices, we can stop searching backwards.
+                if prev_slice_with_any_new_occ and prev_slice_with_note_new_occ and prev_slice_with_rest_new_occ:
                     break
 
-            # Assign the found slices to the current slice's attributes using the original names
-            cur_slice.previous_new_occurrence_per_voice[voice_idx] = prev_slice_with_new_occurrence
-            cur_slice.previous_any_note_per_voice[voice_idx] = prev_slice_with_any_note
+            # Assign the found slices to the current slice's attributes
+            cur_slice.previous_any_note_per_voice[voice_idx] = prev_slice_with_any_new_occ
+
+            cur_slice.previous_note_per_voice[voice_idx] = prev_slice_with_note_new_occ
+            cur_slice.previous_rest_per_voice[voice_idx] = prev_slice_with_rest_new_occ
 
     return salami_slices
 
@@ -383,9 +445,9 @@ def get_subdivisions_for_timesig(numerator: int, denominator: int, division_per_
     return numerator * division_per_beat
 
 def expand_metadata(metadata: dict):
-    # Go from a list of changes in e.g. key-signatures / voice-counts to a 
+    # Go from a list of changes in key-signatures / voice-counts / etc to a 
     # list where each index represents the bar number and the value is value at that bar.
-    # So, [None, (2,1), (2,1), (3,1) ] is the obtained representation for a time-signature change at bar 3
+    # Final data structure: [None, (2,1), (2,1), (3,1) ], which denotes no time-sig in bar 0, then 2/1 time-sig for bar 1&2, and a change into 3/1 at bar 3.
     
     # Metadata categories to be expanded
     convert_from_barline_tuple_to_expanded = ['time_signatures', 'key_signatures']

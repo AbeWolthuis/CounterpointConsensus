@@ -4,14 +4,14 @@ from typing import Dict, Tuple, List, Union
 
 from Note import Note, SalamiSlice
 
-from constants import DURATION_MAP, PITCH_TO_MIDI, MIDI_TO_PITCH
+from constants import DURATION_MAP, PITCH_TO_MIDI, MIDI_TO_PITCH, TIME_SIGNATURE_STRONG_BEAT_MAP
 
 DEBUG = True
 
 class RuleViolation:
     def __init__(self, rule_name: str, rule_id: int, slice_index: int, bar: int,
                  voice_indices: Union[Tuple, str], voice_names: Union[Tuple, str],
-                 note_names: Union[Tuple, str], beat: float, original_line_number: int) -> None:
+                 note_names: Union[Tuple, str], beat: float, original_line_num: int) -> None:
         self.rule_name = rule_name
         self.rule_id = rule_id
         self.slice_index = slice_index
@@ -23,7 +23,7 @@ class RuleViolation:
         self.beat = beat
 
         # Record the original line number of the slice in the source file
-        self.original_line_number = original_line_number
+        self.original_line_num = original_line_num
 
     def __repr__(self):
         voice_info = None
@@ -105,7 +105,7 @@ class CounterpointRules:
         """
         Check that the last slice of each voice has a longa or brevis note.
         """
-        rule_id = 1
+        rule_id = '1'
 
         salami_slices = kwargs['salami_slices']
         curr_slice_index = kwargs["slice_index"]
@@ -127,26 +127,70 @@ class CounterpointRules:
                                     rule_name=rulename,
                                     rule_id=rule_id,
                                     slice_index=curr_slice_index,
-                                    original_line_number=curr_slice.original_line_number,
+                                    original_line_num=curr_slice.original_line_num,
                                     beat=curr_slice.beat,
                                     bar=curr_slice.bar,
                                     voice_indices=voice_number,
                                     voice_names=metadata['voice_names'][voice_number],
-                                    note_names=note.note_name,
+                                    note_names=note.spelled_name,
                                 ))
                     
         return violations
 
-    """ %% Melody %% """
+
+    """ %% Harmony %% """
+    """ % Chords % """
+    @staticmethod
+    def non_root_1st_inv_maj(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
+        """
+        Check that the first and second inversion of a major triad are not used.
+        """
+        rule_id = '18'
+
+        salami_slices = kwargs['salami_slices']
+        curr_slice_index = kwargs["slice_index"]
+        curr_slice: SalamiSlice = salami_slices[curr_slice_index]
+        
+        metadata = kwargs["metadata"]
+
+        violations = []
+        
+        # Get chord analysis
+        chord_analysis = curr_slice._calculate_chord_analysis()
+        # Check if the chord is a major triad
+        maj_triad = chord_analysis['is_major_triad']
+        inv = chord_analysis['inversion']
+        # Check if the chord is a major triad, in either root or 1st inversion
+        if maj_triad and inv in ['root', '1st', '2nd']:
+            a = 1
+            pass
+        else:
+            violations.append(RuleViolation(
+                rule_name=rulename,
+                rule_id=rule_id,
+                slice_index=curr_slice_index,
+                original_line_num=curr_slice.original_line_num,
+                beat=curr_slice.beat,
+                bar=curr_slice.bar,
+                voice_indices=0, # Top voice
+                voice_names=metadata['voice_names'][0],
+                #voice_indices=metadata['voices']-1, # Bottom voice
+                #voice_names=metadata['voice_names'][metadata['voices']-1],
+                note_names=chord_analysis['sounding_note_names']
+            ))           
+   
+        return violations
+
+
+    """ %% Melody %%   """
 
     """ % Intervals and leaps % """
-    
     @staticmethod
     def leap_too_large(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
         """
         Check for large leaps bigger than minor sixth (9 semitones). An octave jump is allowed. 
         """
-        rule_id = 23
+        rule_id = '22'
 
         salami_slices = kwargs['salami_slices']
         metadata = kwargs['metadata']
@@ -156,14 +200,26 @@ class CounterpointRules:
         violations = []
 
         for voice_number, curr_note in enumerate(curr_slice.notes):
-            prev_slice = curr_slice.previous_new_occurrence_per_voice[voice_number]
+            prev_slice = curr_slice.previous_note_per_voice[voice_number]
             # First check if this is a note, and if it has a previous slice with a new occurence (e.g. is not one of the first slices in the piece)
             if (curr_note.note_type == 'note') and (prev_slice is not None):
+
+                # Gather all relevant notes
                 prev_note = prev_slice.notes[voice_number]
+
+                # Gather all relevant rests
+                prev_rest_slice = curr_slice.previous_rest_per_voice[voice_number]
+
                 if prev_note is not None:
                     # If we found a previous note, check if we cross a section.
-                    if curr_slice.bar in metadata['section_starts'] and prev_slice.bar in metadata['section_ends']:
-                        continue # If there between the curr and prev note there is a section, we skip the check.
+                    section_crossed = curr_slice.bar in metadata['section_starts'] and prev_slice.bar in metadata['section_ends']
+                    # Check if we cross a rest
+                    rest_between_curr_prev = prev_rest_slice and prev_rest_slice.original_line_num > prev_slice.original_line_num
+
+                    if section_crossed:
+                        continue 
+                    elif rest_between_curr_prev:
+                        continue
                     else:
                         # If we didnt cross a section, check the leap.
                         interval = abs(curr_note.midi_pitch - prev_note.midi_pitch)
@@ -187,7 +243,7 @@ class CounterpointRules:
         """
         In leaps: in ascending motion, the larger intervals come first; in descending, the smaller first.  
         """
-        rule_id = 25
+        rule_id = '25'
 
         salami_slices = kwargs['salami_slices']
         metadata = kwargs['metadata']
@@ -197,9 +253,9 @@ class CounterpointRules:
         violations = []
 
         for voice_number, curr_note in enumerate(curr_slice.notes):
-            prev_1st_slice = curr_slice.previous_new_occurrence_per_voice[voice_number]
+            prev_1st_slice = curr_slice.previous_note_per_voice[voice_number]
             if prev_1st_slice:
-                prev_2nd_slice = prev_1st_slice.previous_new_occurrence_per_voice[voice_number]
+                prev_2nd_slice = prev_1st_slice.previous_note_per_voice[voice_number]
 
             # First check if this is a note, and if it has two previous slices with a new occurence (e.g. is not one of the first slices in the piece)
             if (curr_note.note_type == 'note') and (prev_1st_slice is not None) and (prev_2nd_slice is not None):
@@ -225,7 +281,7 @@ class CounterpointRules:
                                     rule_name=rulename,
                                     rule_id=rule_id,
                                     slice_index=curr_slice_idx,
-                                    original_line_number=curr_slice.original_line_number,
+                                    original_line_num=curr_slice.original_line_num,
                                     beat=curr_slice.beat,
                                     bar=curr_slice.bar,
                                     voice_indices=voice_number,
@@ -241,7 +297,7 @@ class CounterpointRules:
         Check that a leap in one direction is approached by motion (step or leap) in the opposite direction.
         Also, it must be left in the direction of 
         """
-        rule_id = 26
+        rule_id = '23'
 
         salami_slices = kwargs['salami_slices']
         metadata = kwargs['metadata']
@@ -250,101 +306,163 @@ class CounterpointRules:
 
         violations = []
 
-
         for voice_number, curr_note in enumerate(curr_slice.notes):
-            prev_slice = curr_slice.previous_new_occurrence_per_voice[voice_number]
-            next_slice = curr_slice.next_new_occurrence_per_voice[voice_number]
-            if (curr_note.note_type == 'note') and (prev_slice is not None) and (next_slice is not None):
-                prev_prev_slice = prev_slice.previous_new_occurrence_per_voice[voice_number]
-                if prev_prev_slice is not None:
-                    # First check if this is a note, and if 
-                    prev_prev_note = prev_prev_slice.notes[voice_number]
-                    prev_note = prev_slice.notes[voice_number]
-                    next_note = next_slice.notes[voice_number]
-                    if (prev_note is not None) and (next_note is not None) and (prev_prev_note is not None):
-                        # Check if we cross a section between either of the slices
-                        if (curr_slice.bar in metadata['section_starts'] and prev_slice.bar in metadata['section_ends']) or \
-                        (curr_slice.bar in metadata['section_ends'] and next_slice.bar in metadata['section_starts']):
-                            continue
-                        else:
-                            # If we didnt cross a section, check the leap.
-                            interval_leap = abs(curr_note.midi_pitch - prev_note.midi_pitch)
-                            interval1 = abs(prev_note.midi_pitch - prev_note.midi_pitch)
-                            interval2 = abs(curr_note.midi_pitch - next_note.midi_pitch)
-                            
-                            # Check if the interval is a leap.
-                            if interval_leap > 2:
-                                # If the motion is ascending, first interval in time (interval1) should be descending and interval2 also descending.
-                                # If the motion is descending, first interval in time (interval1) should be ascending.
-                                ascending_leap_violation = False
-                                descending_leap_violation = False
+            # Gather all slices that contain the notes that need to be checked
+            next_slice = curr_slice.next_note_per_voice[voice_number]
+            prev_slice = curr_slice.previous_note_per_voice[voice_number]
+            prev_prev_slice = None if prev_slice is None else prev_slice.previous_note_per_voice[voice_number]
+            
+            if (curr_note.note_type == 'note') and (prev_slice is not None) \
+                and (prev_prev_slice is not None) and (next_slice is not None):
 
-                                if (curr_note.midi_pitch > prev_note.midi_pitch): # Ascending leap:
-                                    # Check if the first interval is descending and the second interval is descending
-                                    if (prev_note.midi_pitch > prev_prev_note.midi_pitch) or (curr_note.midi_pitch < next_note.midi_pitch):
-                                        ascending_leap_violation = True
-                                if (curr_note.midi_pitch < prev_note.midi_pitch): # Descending leap:
-                                    # Check if the first interval is ascending and the second interval is ascending
-                                    if (prev_note.midi_pitch < prev_prev_note.midi_pitch) or (curr_note.midi_pitch > next_note.midi_pitch):
-                                        descending_leap_violation = True
-                                
-                                if ascending_leap_violation or descending_leap_violation:
-                                    violations.append(RuleViolation(
-                                        rule_name=rulename,
-                                        rule_id=rule_id,
-                                        slice_index=curr_slice_idx,
-                                        original_line_number=curr_slice.original_line_number,
-                                        beat=curr_slice.beat,
-                                        bar=curr_slice.bar,
-                                        voice_indices=voice_number,
-                                        voice_names=metadata['voice_names'][voice_number],
-                                        note_names=(prev_prev_note.note_name, prev_note.note_name, next_note.note_name, curr_note.note_name)
-                                    ))
-                                
+                # Gather all notes that need to be checked in the rule
+                next_note = next_slice.notes[voice_number]
+                prev_note = prev_slice.notes[voice_number]
+                prev_prev_note = prev_prev_slice.notes[voice_number]
+
+                # Gather all the slices of the rests that could potentially be in between any of the notes
+                next_rest_slice = curr_slice.next_rest_per_voice[voice_number]
+                prev_rest_slice = curr_slice.previous_rest_per_voice[voice_number]
+                prev_prev_rest_slice = None if prev_rest_slice is None else prev_rest_slice.previous_rest_per_voice[voice_number]
+
+                if (prev_note is not None) and (next_note is not None) and (prev_prev_note is not None):
+                    section_crossed = \
+                        (curr_slice.bar in metadata['section_starts'] and prev_slice.bar in metadata['section_ends']) or \
+                        (prev_slice.bar in metadata['section_starts'] and prev_prev_slice.bar in metadata['section_ends']) or \
+                        (next_slice.bar in metadata['section_starts'] and curr_slice.bar in metadata['section_ends'])
+                    
+                    # Check if there is a rest in between any of the relevant notes.
+                    rest_between_curr_next = next_rest_slice and next_rest_slice.original_line_num < next_slice.original_line_num
+                    rest_between_curr_prev = prev_rest_slice and prev_rest_slice.original_line_num > prev_slice.original_line_num
+                    rest_between_curr_prev_prev = prev_prev_rest_slice and ((prev_rest_slice.original_line_num > prev_prev_slice.original_line_num)\
+                                                                            or (prev_prev_rest_slice.original_line_num > prev_prev_slice.original_line_num) )
+                    
+                    if section_crossed:
+                        continue
+                    elif rest_between_curr_next or rest_between_curr_prev or rest_between_curr_prev_prev:
+                        continue
+                    else:
+                        # If we didnt cross a section or rest, check the leap.
+                        interval_leap = abs(curr_note.midi_pitch - prev_note.midi_pitch)
+                        interval1 = abs(prev_note.midi_pitch - prev_note.midi_pitch)
+                        interval2 = abs(curr_note.midi_pitch - next_note.midi_pitch)
+                        
+                        # Check if the interval is a leap.
+                        if interval_leap > 2:
+                            # If the motion is ascending, first interval in time (interval1) should be descending and interval2 also descending.
+                            # If the motion is descending, first interval in time (interval1) should be ascending.
+                            ascending_leap_violation = False
+                            descending_leap_violation = False
+
+                            if (curr_note.midi_pitch > prev_note.midi_pitch): # Ascending leap:
+                                # Check if the first interval is descending and the second interval is descending
+                                if (prev_note.midi_pitch > prev_prev_note.midi_pitch) or (curr_note.midi_pitch < next_note.midi_pitch):
+                                    ascending_leap_violation = True
+                            if (curr_note.midi_pitch < prev_note.midi_pitch): # Descending leap:
+                                # Check if the first interval is ascending and the second interval is ascending
+                                if (prev_note.midi_pitch < prev_prev_note.midi_pitch) or (curr_note.midi_pitch > next_note.midi_pitch):
+                                    descending_leap_violation = True
+                            
+                            if ascending_leap_violation or descending_leap_violation:
+                                violations.append(RuleViolation(
+                                    rule_name=rulename,
+                                    rule_id=rule_id,
+                                    slice_index=curr_slice_idx,
+                                    original_line_num=curr_slice.original_line_num,
+                                    beat=curr_slice.beat,
+                                    bar=curr_slice.bar,
+                                    voice_indices=voice_number,
+                                    voice_names=metadata['voice_names'][voice_number],
+                                    note_names=(prev_prev_note.note_name, prev_note.note_name, next_note.note_name, curr_note.note_name)
+                                ))
+                            
         return violations  
 
-
-
+    """ % Dots and ties % """
     @staticmethod
-    def no_parallel_fiths(name, **kwargs) -> Dict[str, List[RuleViolation]]:
-        
-        rule_id = 1000
-
+    def tie_into_strong_beat(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
+        """
+        Check if the current note is a tie-end and falls on a strong beat.
+        """
+        rule_id = '14a'
         salami_slices = kwargs['salami_slices']
         metadata = kwargs['metadata']
-        curr_slice_idx = kwargs['slice_index']
+        curr_slice_idx = kwargs["slice_index"]
         curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
-
-        
 
         violations = []
 
-        for voice_pair, interval1 in curr_slice.reduced_intervals.items():
-            if interval1 == 7:
-
-                if voice_pair in slice_prev.reduced_intervals:
-                    interval2 = slice_prev.reduced_intervals[voice_pair]
-                    # Parallel fifth is:
-                    # 1. First and second interval are perfect fifths (7 semitones)
-                    # 2. The second slice notes are not tied over. Note, a repetition is also seen as a parallel perfect fifth.
-                    if (interval2 == interval1) and (slice_cur.notes[voice_pair[0]].is_new_occurrence and slice_cur.notes[voice_pair[1]].is_new_occurrence):
-                        # Include notes from both slices: first the previous slice, then the current slice
-                        prev_notes = (slice_prev.notes[voice_pair[0]].note_name, slice_prev.notes[voice_pair[1]].note_name)
-                        curr_notes = (slice_cur.notes[voice_pair[0]].note_name, slice_cur.notes[voice_pair[1]].note_name)
-                        all_notes = prev_notes + curr_notes
-                        
+        for voice_number, curr_note in enumerate(curr_slice.notes):
+            # Gather all slices that contain the notes that need to be checked
+            if curr_note.note_type == 'note' and curr_note.is_tie_end:
+                # Check if the current slice is a strong beat
+                time_sig = metadata['time_signatures'][curr_slice.bar][voice_number]
+                numerator = str(time_sig[0])
+                denomintator = str(time_sig[1])
+                if numerator in TIME_SIGNATURE_STRONG_BEAT_MAP and denomintator in TIME_SIGNATURE_STRONG_BEAT_MAP[numerator]:
+                    strong_beats = TIME_SIGNATURE_STRONG_BEAT_MAP[numerator][denomintator]
+                    if curr_slice.beat in strong_beats:
                         violations.append(RuleViolation(
-                            rule_name=name, 
+                            rule_name=rulename,
                             rule_id=rule_id,
-                            slice_index=slice_index, 
-                            bar=slice_cur.bar,
-                            voice_indices=voice_pair,
-                            note_names=all_notes,
-                            beat=slice_cur.beat  # Include beat position
+                            slice_index=curr_slice_idx,
+                            original_line_num=curr_slice.original_line_num,
+                            beat=curr_slice.beat,
+                            bar=curr_slice.bar,
+                            voice_indices=voice_number,
+                            voice_names=metadata['voice_names'][voice_number],
+                            note_names=curr_note.note_name
                         ))
-        return violations
-    
+                else:
+                    raise ValueError(f"Time signature {time_sig} not found in TIME_SIGNATURE_STRONG_BEAT_MAP")
+            
 
+        return violations
+
+    @staticmethod
+    def tie_into_weak_beat(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
+        """
+        Check if the current note is a tie-end and falls on a strong beat.
+        """
+        rule_id = '14b'
+        salami_slices = kwargs['salami_slices']
+        metadata = kwargs['metadata']
+        curr_slice_idx = kwargs["slice_index"]
+        curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
+
+        violations = []
+
+        for voice_number, curr_note in enumerate(curr_slice.notes):
+            # Gather all slices that contain the notes that need to be checked
+            if curr_note.note_type == 'note' and curr_note.is_tie_end:
+                # Check if the current slice is a strong beat
+                time_sig = metadata['time_signatures'][curr_slice.bar][voice_number]
+                numerator = str(time_sig[0])
+                denomintator = str(time_sig[1])
+                if numerator in TIME_SIGNATURE_STRONG_BEAT_MAP and denomintator in TIME_SIGNATURE_STRONG_BEAT_MAP[numerator]:
+                    strong_beats = TIME_SIGNATURE_STRONG_BEAT_MAP[numerator][denomintator]
+                    if curr_slice.beat not in strong_beats:
+                        violations.append(RuleViolation(
+                            rule_name=rulename,
+                            rule_id=rule_id,
+                            slice_index=curr_slice_idx,
+                            original_line_num=curr_slice.original_line_num,
+                            beat=curr_slice.beat,
+                            bar=curr_slice.bar,
+                            voice_indices=voice_number,
+                            voice_names=metadata['voice_names'][voice_number],
+                            note_names=curr_note.note_name
+                        ))
+                else:
+                    raise ValueError(f"Time signature {time_sig} not found in TIME_SIGNATURE_STRONG_BEAT_MAP")
+            
+
+        return violations
+
+
+    """ %% Quarter note idioms %% """
+
+    
 
     @staticmethod
     def has_valid_range__(name, **kwargs) -> Dict[str, List[RuleViolation]]:

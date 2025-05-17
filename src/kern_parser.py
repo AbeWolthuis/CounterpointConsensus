@@ -10,8 +10,7 @@ import cProfile, pstats
 
 
 ''' Our own modules '''
-from constants import DURATION_MAP, TRIPLET_DURATION_MAP, INFINITY_BAR
-from constants import FLOAT_TRUNCATION_DIGITS, BEAT_GRID_DIVISIONS, TIME_SIGNATURE_NORMALIZATION_MAP ,PITCH_TO_MIDI, MIDI_TO_PITCH 
+from constants import DURATION_MAP, TRIPLET_DURATION_MAP, INFINITY_BAR, PITCH_TO_MIDI
 from counterpoint_rules import RuleViolation
 from data_preparation import violations_to_df
 from annotate_kern import annotate_all_kern
@@ -199,7 +198,6 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
 
     return salami_slices, metadata
 
-
 def parse_note_section(note_section_with_indices: List[Tuple[int, str]], metadata: dict) -> List:
     """ Parse the notes into salami slices """
     salami_slices = []
@@ -215,7 +213,7 @@ def parse_note_section(note_section_with_indices: List[Tuple[int, str]], metadat
         new_salami_slice = SalamiSlice(
             num_voices=int(metadata['voices']),
             bar = current_bar,
-            original_line_number=original_line_idx,
+            original_line_num=original_line_idx,
         )        
 
         tokens = line.split()
@@ -347,7 +345,7 @@ def kern_token_to_note(
                 new_note.midi_pitch = PITCH_TO_MIDI[pitch_token]
 
                 ''' Check for new accidentals after the pitch. '''
-                accidental_token = 0
+                accidental_token = ''
                 accidental_token_len = 0
 
                 if (i+pitch_token_len < len(kern_token)) and kern_token[i+pitch_token_len].lower() in accidentals:
@@ -372,6 +370,12 @@ def kern_token_to_note(
                         i += 1
                 else:
                     raise NotImplementedError("Not using editorial accidentals is not yet implemented.")
+
+                # **Set the spelled note name**
+                new_note.octave = new_note.midi_pitch // 12 # integer division to get the octave
+                base_letter = pitch_token[0].upper()
+                new_note.spelled_name = f"{base_letter}{accidental_token}" + str(new_note.octave)
+
 
                 # If the pitch token len is only 1 (e.g. 1F), then we skip zero extra places over the increase i+=1 at the end of the loop.
                 # If it is longer, then skip that amount, plus any accidentals (if present).
@@ -576,7 +580,6 @@ def parse_keysig(line: str, metadata: dict, bar_count: int, line_idx: int) -> di
     return metadata
 
 
-
 def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRules,
                        only_validate_rules: list = None):
     violations = defaultdict(list[RuleViolation])
@@ -600,9 +603,10 @@ def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRules,
 
 
 if __name__ == "__main__":
-    filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn")]
+    #filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn"),os.path.join("..", "data", "test", "Rue1024a.krn"),os.path.join("..", "data", "test", "Oke1014-Credo_Village.krn")]
+    # filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn")]
     # filepaths = [os.path.join("..", "data", "test", "Jos1408-test.krn")]
-    # filepaths = [os.path.join("..", "data", "test", "Rue1024a.krn")]
+    filepaths = [os.path.join("..", "data", "test", "Rue1024a.krn")]
     # filepaths = [os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")]
 
     # profiler = cProfile.Profile()
@@ -631,7 +635,8 @@ if __name__ == "__main__":
         cp_rules = CounterpointRules()
         only_validate_rules = [
             'interval_order_motion', 'longa_only_at_endings', 'leap_too_large',
-            'leap_approach_left_opposite',
+            'leap_approach_left_opposite', 'tie_into_strong_beat', 'tie_into_weak_beat',
+            'non_root_1st_inv_maj',
         ]
 
         violations = validate_all_rules(salami_slices, metadata, cp_rules, only_validate_rules)
@@ -656,13 +661,15 @@ if __name__ == "__main__":
     annotate_violations_flag = True
     if annotate_violations_flag:
         destination_dir = os.path.join("..", "data", "annotated")
-        annotate_all_kern(filepaths, destination_dir, all_metadata, all_violations, overwrite=True, maintain_jrp_structure=True, verbose=True)
+        annotate_all_kern(filepaths, destination_dir, all_metadata, all_violations, 
+                          use_rule_ids=True, overwrite=True, maintain_jrp_structure=True, verbose=True)
 
     # profiler.disable()
     # stats = pstats.Stats(profiler).sort_stats(pstats.SortKey.TIME)
     # stats.print_stats()
     
     print()
+    pd.set_option('display.max_columns', None)
     display(full_violations_df.head()); print()
 
 
