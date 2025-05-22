@@ -406,7 +406,7 @@ def kern_token_to_note(
                 # Check if it's a final barline (double equals)
                 #print(f"Found barline in token '{kern_token}'")
                 if kern_token.startswith('=='):
-                    print('Found final barline\n\n')
+                    print('Found final barline')
                     new_note.note_type = 'final_barline'
                 else:
                     new_note.note_type = 'barline'
@@ -603,11 +603,11 @@ def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRules,
 
 
 if __name__ == "__main__":
-    #filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn"),os.path.join("..", "data", "test", "Rue1024a.krn"),os.path.join("..", "data", "test", "Oke1014-Credo_Village.krn")]
     # filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn")]
     # filepaths = [os.path.join("..", "data", "test", "Jos1408-test.krn")]
     filepaths = [os.path.join("..", "data", "test", "Rue1024a.krn")]
     # filepaths = [os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")]
+    filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn"),os.path.join("..", "data", "test", "Rue1024a.krn"),os.path.join("..", "data", "test", "Oke1014-Credo_Village.krn")]
 
     # profiler = cProfile.Profile()
     # profiler.enable()
@@ -635,8 +635,8 @@ if __name__ == "__main__":
         cp_rules = CounterpointRules()
         only_validate_rules = [
             'interval_order_motion', 'longa_only_at_endings', 'leap_too_large',
-            'leap_approach_left_opposite', 'tie_into_strong_beat', 'tie_into_weak_beat',
-            'non_root_1st_inv_maj',
+            #'leap_approach_left_opposite', 'tie_into_strong_beat', 'tie_into_weak_beat',
+            #'non_root_1st_inv_maj',
         ]
 
         violations = validate_all_rules(salami_slices, metadata, cp_rules, only_validate_rules)
@@ -646,6 +646,7 @@ if __name__ == "__main__":
         else:
             full_violations_df = pd.concat([full_violations_df, curr_df], ignore_index=True)
 
+        print(f"\tJRP-ID: {metadata['jrpid']}")
         pprint(violations)
         
         # Store the violations in a dict, with its JRP ID as the key.
@@ -657,7 +658,7 @@ if __name__ == "__main__":
         all_metadata[curr_jrpid] = metadata
         all_violations[curr_jrpid] = violations
 
-        
+    
     annotate_violations_flag = True
     if annotate_violations_flag:
         destination_dir = os.path.join("..", "data", "annotated")

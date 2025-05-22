@@ -44,27 +44,28 @@ class FloatTruncator:
 
 
 class SalamiSlice(FloatTruncator):
-    def __init__(self, offset=-1, beat=-1, num_voices=-1, bar=-1, original_line_num=-1) -> None:
-        self.offset = offset
-        self.beat = beat  # Position in bar in musical beats
-        self.num_voices = num_voices
+    def __init__(self, offset=-1.0, beat=-1.0, num_voices=-1, bar=-1, original_line_num=-1, notes = None,
+                 lowest_voice=None, chord_analysis=None) -> None:
+        self.offset: float = offset # Offset from start of bar 
+        self.beat: float = beat  # Position in bar in musical beats
+        self.num_voices: int = num_voices
+        self.bar: int = bar
         self.notes: list[Note|None] = [None] * num_voices
-        self.bar = bar
 
+        # Harmony
+        self.lowest_voice: int = lowest_voice
         self.absolute_intervals = None # Will be: Dict[Tuple[int, int], int]
         self.reduced_intervals = None # Will be: Dict[Tuple[int, int], int]
+        self.chord_analysis = chord_analysis
 
         # Record original line number in the source file
-        self.original_line_num = original_line_num
-
+        self.original_line_num: int = original_line_num
         
-        # Link each voice to a difference slice
+        # Link each voice to a previous/next slice
         self.next_any_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
         self.next_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
         self.next_rest_per_voice: list[SalamiSlice|None] = [None] * num_voices
-        
-        
-        
+                
         self.previous_any_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
         self.previous_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
         self.previous_rest_per_voice: list[SalamiSlice|None] = [None] * num_voices
@@ -78,7 +79,26 @@ class SalamiSlice(FloatTruncator):
         notes_str = "[" + ", ".join([str(note) for note in self.notes]) + "]"
         
         return f"{padded_offset_str}{notes_str}\n"
-    
+
+    __slots__ = (
+        'offset',
+        'beat',
+        'num_voices',
+        'bar',
+        'notes',
+        'lowest_voice',
+        'absolute_intervals',
+        'reduced_intervals',
+        'original_line_num',
+        'next_any_note_per_voice',
+        'next_note_per_voice',
+        'next_rest_per_voice',
+        'previous_any_note_per_voice',
+        'previous_note_per_voice',
+        'previous_rest_per_voice',
+        'chord_analysis',
+    )  
+
     @property
     def truncated_beat_as_str(self, digits=FLOAT_TRUNCATION_DIGITS) -> str:
         return self.truncate_float_as_string(self.beat, digits)
@@ -96,10 +116,9 @@ class SalamiSlice(FloatTruncator):
         intervals = {}
         for i, note1 in enumerate(self.notes):
             for j, note2 in enumerate(self.notes):
-                if i < j and note1 and note2 and note1.note_type == 'note' and note2.note_type == 'note':
+                if note1 and note2 and note1.note_type == 'note' and note2.note_type == 'note':
                     interval = abs(note1.midi_pitch - note2.midi_pitch)
                     intervals[(i, j)] = interval
-                    intervals[(j, i)] = interval
         return intervals
     
     def _calculate_reduced_intervals(self) -> Dict[Tuple[int, int], int]:
@@ -111,10 +130,9 @@ class SalamiSlice(FloatTruncator):
         intervals = {}
         for i, note1 in enumerate(self.notes):
             for j, note2 in enumerate(self.notes):
-                if i < j and note1 and note2 and note1.note_type == 'note' and note2.note_type == 'note':
+                if note1 and note2 and note1.note_type == 'note' and note2.note_type == 'note':
                     interval = abs(note1.midi_pitch - note2.midi_pitch) % 12
                     intervals[(i, j)] = interval
-                    intervals[(j, i)] = interval
         return intervals
     
     
@@ -127,7 +145,7 @@ class SalamiSlice(FloatTruncator):
         Note names in the output (root, bass) will be in Humdrum format (e.g., 'C', 'c', 'a-').
         """
         analysis_result = { # List of original Note objects
-            "bass_note_voice": None,
+            # "bass_note_voice": None,
             "root_note_voice": None,
             
             #"pitch_classes_display": sorted(list(set(p % 12 for p in note_names_for_m21))),
@@ -145,24 +163,26 @@ class SalamiSlice(FloatTruncator):
             "is_augmented_triad": False,
         }
 
-        sounding_note_names_voice_order = [note for note in self.notes if note and note.note_type == 'note' and note.midi_pitch != -1]
-        sorted_sounding_notes_objects = sorted(sounding_note_names_voice_order, key=lambda n: n.midi_pitch
-        )
-        analysis_result['sounding_note_names_voice_order'] = sounding_note_names_voice_order
+        sounding_notes_voice_order = [note for note in self.notes if note and note.note_type == 'note' and note.midi_pitch != -1]
+        #sounding_notes_pitch_order = sorted(sounding_notes_voice_order, key=lambda n: n.midi_pitch)
+        analysis_result['sounding_note_names_voice_order'] = sounding_notes_voice_order
+
+        # Use the octave-containing note names for music21. Remove the explicit natural sign from 
+        note_names_for_m21_voice_order = [note.note_name.replace("n", "") for note in sounding_notes_voice_order]
+        #note_names_for_m21_pitch_order = [note.note_name.replace("n", "") for note in sounding_notes_pitch_order]
 
         # Set lowest note (some upper voice could cross into the bass)
-        analysis_result['bass_note_voice'] = sorted_sounding_notes_objects[0].voice
+        # analysis_result['bass_note_voice'] = sorted_sounding_notes_objects[0].voice
 
-        if not sorted_sounding_notes_objects:
+        if not sounding_notes_voice_order:
             return None # No notes to analyze, a valid empty case.
 
-        # Use the octave-containing note names for music21
-        note_names_for_m21 = [note.note_name for note in sorted_sounding_notes_objects]
+        
         
 
         # Handle single notes directly without music21.chord.Chord
-        if len(note_names_for_m21) == 1:
-            single_note_obj = sorted_sounding_notes_objects[0]
+        if len(note_names_for_m21_voice_order) == 1:
+            single_note_obj = sounding_notes_voice_order[0]
             analysis_result["common_name_m21"] = "single_note"
             analysis_result["quality"] = "single_note"
             analysis_result["inversion"] = "single_note"
@@ -170,20 +190,24 @@ class SalamiSlice(FloatTruncator):
             return analysis_result
 
         try:
-            m21_sonority = music21.chord.Chord(note_names_for_m21)
+            m21_sonority = music21.chord.Chord(note_names_for_m21_voice_order)
             analysis_result["common_name_m21"] = m21_sonority.commonName
             
             # Determine the voice in the slice which has the root 
             m21_root_pitch_obj = m21_sonority.root()
             a=1
             if m21_root_pitch_obj is not None:
-                root_name_m21 = m21_root_pitch_obj.name
-                # Find lowest note with the same pitch class as the root
-                for note in sorted_sounding_notes_objects:
-                    if note.note_name == root_name_m21:
+                root_name_m21 = m21_root_pitch_obj.nameWithOctave
+                # Find lowest note in the slice with the same pitch class as the root detected by music21
+                for note in sounding_notes_voice_order:
+                    # Compare the note name (must be without octave) to the root name from music21
+                    if note.note_name.replace("n", "") == root_name_m21:
                         analysis_result["root_note_voice"] = note.voice
-                        break   
+                        break
+                else:
+                    raise ValueError(f"No note with root name '{root_name_m21}' found in sorted sounding notes: {[n.note_name for n in sounding_notes_pitch_order]}")
             else:
+                raise ValueError("Music21 returned None for root pitch object")
                 analysis_result["root_note_name"] = "undetermined" # Could raise error if strictness demands
 
             analysis_result["quality"] = m21_sonority.quality
@@ -197,7 +221,7 @@ class SalamiSlice(FloatTruncator):
                 else: analysis_result["inversion"] = f"{inv_int}th"
             else:
                 # This would be an unexpected return type for .inversion()
-                raise TypeError(f"Music21 .inversion() returned unexpected type: {type(inv_int)} for pitches {note_names_for_m21}")
+                raise TypeError(f"Music21 .inversion() returned unexpected type: {type(inv_int)} for pitches {note_names_for_m21_voice_order}")
 
             # Chord type flags
             if len(m21_sonority.pitches) == 2:
@@ -210,9 +234,10 @@ class SalamiSlice(FloatTruncator):
             analysis_result["is_augmented_triad"] = m21_sonority.isAugmentedTriad()
 
         except Exception as e: # Catch any other unexpected errors
+            raise e
             raise RuntimeError(
-                f"Unexpected error during music21 analysis of MIDI pitches {note_names_for_m21} "
-                f"(Bar: {self.bar}, Beat: {self.beat:.2f}, OrigLine: {self.original_line_num}, Notes: {[n.note_name for n in sorted_sounding_notes_objects]}): {str(e)}"
+                f"Unexpected error during music21 analysis of MIDI pitches {note_names_for_m21_voice_order} "
+                f"(Bar: {self.bar}, Beat: {self.beat:.2f}, OrigLine: {self.original_line_num}, Notes: {[n.note_name for n in sounding_notes_pitch_order]}): {str(e)}"
             ) from e
         
         # Catch cases, for debugging
@@ -244,7 +269,6 @@ class Note(FloatTruncator):
         'midi_pitch',
         'octave'
         'spelled_name', # e.g. 
-        'is_consonance'
         'duration',
         'bar',
         'is_tied',
@@ -254,15 +278,17 @@ class Note(FloatTruncator):
         'is_new_occurrence', 
         'is_triplet',
         'is_longa',
-        #'voice',
+        'is_consonance',
+        'absolute_interval_to_root',
+        'reduced_interval_to_root',
+        'voice',
     )
 
     def __init__(self, 
                 # Pitch
                 midi_pitch: int = -1,
                 octave: int = -1,
-                spelled_name: str|None = None,
-                is_consonance: bool|None = None,
+                spelled_name: str|None = None,               
 
                 # Rhythm
                 duration: float = -1.0,
@@ -275,12 +301,17 @@ class Note(FloatTruncator):
 
                 # Note quality
                 note_type: str|None = None,
-                new_occurence: bool = True,
+                is_new_occurence: bool = True,
                 is_triplet: bool = False,    
-                is_longa: bool = False,    
+                is_longa: bool = False,  
 
-                # Ease of processing
-                voice: int = -1,         
+                # Harmonic properties
+                is_consonance: bool|None = None, 
+                interval_to_root: int|None = None, # Interval to root in semitones
+                reduced_interval_to_root: int|None = None,
+
+                # Redundant, but for ease of processing
+                voice: int|None = None,         
             ) -> None:
         
         # Pitch
@@ -297,7 +328,7 @@ class Note(FloatTruncator):
         self.is_tie_end = is_tie_end   
         # Note quality
         self.note_type = note_type
-        self.is_new_occurrence = new_occurence
+        self.is_new_occurrence = is_new_occurence
         self.is_triplet = is_triplet  
         self.is_longa = is_longa
         # Properties for ease of processing

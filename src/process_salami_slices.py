@@ -69,18 +69,26 @@ def set_period_notes(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
                     a = 1
                 # Copy all of the properties to the period note
                 new_note = Note(
+                    # Pitch properties
                     midi_pitch=prev_note.midi_pitch,
                     octave=prev_note.octave,
                     spelled_name=prev_note.spelled_name,
-                    duration=prev_note.duration,
-                    bar=prev_note.bar,
-                    note_type=prev_note.note_type,  # Change from 'period' to 'note'
-                    new_occurence=False,  # Explicitly set as not a new occurrence
+
+                    # Rhythm properties
+                    # bar # TODO: bar can change from the previous note
+                    duration=prev_note.duration, # TODO: should be set to the duration of the slice, not the previous note
+
+                    # Note quality
+                    note_type=prev_note.note_type,
+                    is_new_occurence=False,  # Explicitly not a new occurrence
                     is_triplet=prev_note.is_triplet,
                     is_longa=prev_note.is_longa,
 
-                    # Only set is_tied
-                    is_tied=prev_note.is_tied,
+                    # Harmonic properties
+                    # Are set later, for all notes
+
+                    # Voice information
+                    voice=prev_note.voice,
                 )
 
                 # Replace the period note with our new note
@@ -226,34 +234,6 @@ def calculate_offsets(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
         a = 1
     return salami_slices
 
-def _DEPRECATED_calculate_offsets(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
-    """ Calculate the offset of each slice from the beginning of its bar """
-    current_offset = 0.0
-    current_bar = 1  # Start with bar 1
-    
-    for i, cur_slice in enumerate(salami_slices):
-        # If this is a new bar, reset the offset
-        if cur_slice.bar != current_bar:
-            current_offset = 0
-            current_bar = cur_slice.bar
-        
-        # Set the offset for this slice
-        cur_slice.offset = current_offset
-        # Calculate the next offset based on the shortest duration in this slice
-        min_duration = float('inf')
-        has_valid_note = False
-        
-        for note in cur_slice.notes:
-            if note and note.note_type in ('note', 'rest'):
-                min_duration = min(min_duration, note.duration)
-                has_valid_note = True
-        
-        # Only update the current offset if we found valid notes.
-        # Doesn't update if the slice is a barline or final barline.
-        if has_valid_note:
-            current_offset += min_duration
-    
-    return salami_slices
 
 def calculate_beat_positions(salami_slices: list[SalamiSlice], metadata) -> list[SalamiSlice]:
     """ 
@@ -315,27 +295,53 @@ def set_interval_property(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]
 def set_chordal_properties(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
     """ Set choral properties, using m21. This includes e.g. chord name, and consonance of notes."""
     
-    # Calculates chord analysis for each slice and determines consonance/dissonance for each note.
+    # Calculates for each slice the chord analysis, the lowest note, and determines consonance/dissonance for each note.
     for salami_slice in salami_slices:
-        # Calculate and store chord analysis for the slice
+        # --- Calculate and store chord analysis for the slice ---
         current_chord_analysis_data = salami_slice._calculate_chord_analysis()
         salami_slice.chord_analysis = current_chord_analysis_data
 
-        # Calculate the interval of each note to the root of the chord.
-        # Set consonance/dissonance accordingly.
-        root_note_voice = current_chord_analysis_data['root_note_voice']
-        root_note = salami_slice.notes[root_note_voice]
+        # --- Find the index of the voice with the lowest MIDI pitch ---
+        # Create a list of (original_index, note_object) for valid, sounding notes
+        indexed_sounding_notes = [
+            (i, note_obj)
+            for i, note_obj in enumerate(salami_slice.notes)
+            if note_obj and note_obj.note_type == 'note' and note_obj.midi_pitch != -1
+        ]
+
+        if not indexed_sounding_notes:
+            # No sounding notes in the slice
+            salami_slice.lowest_voice = None
+        else:
+            # Use min() with a key that extracts the midi_pitch from the note_object part of the tuple.
+            # min() will return the tuple (original_index, note_object) that has the smallest pitch.
+            min_item_tuple = min(indexed_sounding_notes, key=lambda item: item[1].midi_pitch)
+            salami_slice.lowest_voice = min_item_tuple[0]
+
+        # --- Calculate the interval of each note to the root of the chord. Set consonance/dissonance accordingly. --- 
+        if salami_slice.chord_analysis:
+            root_note_voice = salami_slice.chord_analysis.get('root_note_voice', None)
+        else:
+            root_note_voice = None
+        
+        # If there is no root note voice, the slice has no notes.
+        if root_note_voice is None:
+            
 
         for voice_idx, note in enumerate(salami_slice.notes):
-            interval_to_root = salami_slice.reduced_intervals[(root_note_voice, voice_idx)]
-            note.is_consonance = REDUCED_INTERVAL_CONSONANCE_MAP[interval_to_root]
-            raise NotImplementedError("TODO: implement the note relation to root")
-
-
-
+            if note.note_type == 'note':
+                if current_chord_analysis_data['quality'] == 'single_note':
+                    note.absolute_interval_to_root = 0
+                    note.reduced_interval_to_root = 0
+                    note.is_consonance = REDUCED_INTERVAL_CONSONANCE_MAP[0]
+                else:
+                    note.absolute_interval_to_root = salami_slice.absolute_intervals[(root_note_voice, voice_idx)]
+                    note.reduced_interval_to_root = salami_slice.reduced_intervals[(root_note_voice, voice_idx)]
+                    note.is_consonance = REDUCED_INTERVAL_CONSONANCE_MAP[note.reduced_interval_to_root]
+            
     return salami_slices
 
-def determine_note_relation_to_root
+
 
 
 def link_salami_slices(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
@@ -389,7 +395,7 @@ def link_salami_slices(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
         for voice_idx, _ in enumerate(cur_slice.notes):
             # Find the previous slice containing *any* note, the previous slice containing a *new occurrence* note,
             # and the previous slice containing a *rest* for this voice
-            prev_slice_with_any_new_occ = None       # Will store the slice with the *immediately* preceding note
+            prev_slice_with_any_new_occ = None       # Will store the slice with the *immediately* preceding new occurrence
             prev_slice_with_note_new_occ = None      # Will store the slice with the preceding *new occurrence* note
             prev_slice_with_rest_new_occ = None      # Will store the slice with the preceding *rest*
 
