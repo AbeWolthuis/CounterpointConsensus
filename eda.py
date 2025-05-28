@@ -6,38 +6,8 @@ import numpy as np # Import numpy for linspace
 import seaborn as sns # Import seaborn
 
 
-def find_jrp_files(root_dir, valid_files=None, invalid_files=None, ano_mode='skip'):
+from src.data_preparation import find_jrp_files
 
-    """
-    Recursively find all .krn files in root_dir, filter by valid_files/invalid_files.
-    Returns a list of filepaths.
-    """
-    krn_files = []
-    for dirpath, _, filenames in os.walk(root_dir):
-        for fname in filenames:
-            if fname.endswith('.krn'):
-                # Assumes the file name format is consistent with JRP IDs, e.g., "COM_01-12345-01.krn"
-                # Note, the composer-abbreviation is the first 3 characters of the filename.
-                jrp_id = fname.split('-')[0]
-                if valid_files is not None and jrp_id not in valid_files:
-                    continue
-                if invalid_files is not None and jrp_id in invalid_files:
-                    continue
-                # Check for Ano files if ano_mode is 'skip' or 'prefix'
-                if jrp_id.startswith('Ano'):
-                    if ano_mode == 'skip':
-                        continue
-                    elif ano_mode == 'prefix':
-                        # TODO: get the composer from another source, e.g. one of the !!! record fields in the JRP data
-
-                        # Get parent folder name (assume immediate parent is the composer code)
-                        parent_folder = os.path.basename(os.path.dirname(dirpath))
-                        jrp_id = f"{parent_folder}_{jrp_id}"
-                        # Update the filename to include the parent folder
-                        fname = f"{parent_folder}_{fname}"
-
-                krn_files.append(os.path.join(dirpath, fname))
-    return krn_files
 
 def count_slices(filepath):
     """
@@ -76,14 +46,14 @@ def get_voice_count(filepath):
         print(f"Error processing file {filepath} for voice count: {e}")
         return 0 # Return 0 or None, or raise exception as appropriate
 
-def jrp_data_eda(root_dir, valid_files=None, invalid_files=None, ano_mode='skip'):
+def jrp_data_eda(root_dir, valid_files=None, invalid_files=None, anonymous_mode='skip'):
     """
     Load JRP data from **kern files in root_dir, filtered by valid_files/invalid_files.
     Counts slices and voices for each file.
     Returns a pandas DataFrame with 'jrp_id', 'composer', 'slice_count', 'voice_count', and 'filepath'.
     ano_mode: 'skip' to exclude Ano files, 'prefix' to prefix with folder code.
     """
-    files = find_jrp_files(root_dir, valid_files, invalid_files, ano_mode)
+    files = find_jrp_files(root_dir, valid_files, invalid_files, anonymous_mode)
     if not files:
         print("No valid files found.")
         return pd.DataFrame()  # Return an empty DataFrame if no files are found
@@ -95,9 +65,9 @@ def jrp_data_eda(root_dir, valid_files=None, invalid_files=None, ano_mode='skip'
         composer = jrp_id[:3]
         # Handle Ano files
         if jrp_id.startswith('Ano'):
-            if ano_mode == 'skip':
+            if anonymous_mode == 'skip':
                 continue
-            elif ano_mode == 'prefix':
+            elif anonymous_mode == 'prefix':
                 # Get parent folder name (assume immediate parent is the composer code)
                 parent_folder = os.path.basename(os.path.dirname(f))
                 jrp_id = f"{parent_folder}_{jrp_id}"
@@ -253,13 +223,11 @@ if __name__ == '__main__':
     valid_files = None
     invalid_files = ['Bus3064', 'Bus3078', 'Com1002a', 'Com1002b', 'Com1002c', 'Com1002d', 'Com1002e', 'Duf2027a', 'Duf3015', 'Duf3080', 'Gas0204c', 'Gas0503', 'Gas0504', 'Jos0302e', 'Jos0303c', 'Jos0303e', 'Jos0304c', 'Jos0402d', 'Jos0402e', 'Jos0602e', 'Jos0603d', 'Jos0901e', 'Jos0902a', 'Jos0902b', 'Jos0902c', 'Jos0902d', 'Jos0902e', 'Jos0904a', 'Jos0904b', 'Jos0904d', 'Jos0904e', 'Jos1302', 'Jos1501', 'Jos1610', 'Jos1706', 'Jos1802', 'Jos2015', 'Jos2102', 'Jos2602', 'Jos3004', 'Jos9901a', 'Jos9901e', 'Jos9905', 'Jos9906', 'Jos9907a', 'Jos9907b', 'Jos9908', 'Jos9909', 'Jos9910', 'Jos9911', 'Jos9912', 'Jos9914', 'Jos9923', 'Mar1003c', 'Mar3040', 'Oke1003a', 'Oke1003b', 'Oke1003c', 'Oke1003d', 'Oke1003e', 'Oke1005a', 'Oke1005b', 'Oke1005c', 'Oke1005d', 'Oke1005e', 'Oke1010a', 'Oke1010b', 'Oke1010c', 'Oke1010d', 'Oke1010e', 'Oke1011d', 
 'Oke3025', 'Ort2005', 'Rue1007a', 'Rue1007b', 'Rue1007c', 'Rue1007d', 'Rue1007e', 'Rue1029a', 'Rue1029b', 'Rue1029c', 'Rue1029d', 'Rue1029e', 'Rue1035a', 'Rue1035b', 'Rue1035c', 'Rue1035d', 'Rue1035e', 'Rue2028', 'Rue2030', 'Rue2032', 'Rue3004', 'Rue3013', 'Tin3002']
-    manual_invalid_files = [
-        'Jos0603a',
-    ]
+    manual_invalid_files = ['Jos0603a',]
     invalid_files.extend(manual_invalid_files)
 
     # Example usage:
-    df = jrp_data_eda(DATASET_PATH, valid_files=valid_files, invalid_files=invalid_files, ano_mode='skip')
+    df = jrp_data_eda(DATASET_PATH, valid_files=valid_files, invalid_files=invalid_files, anonymous_mode='skip')
     # Sort df by voice_count
     df = df.sort_values(by='slice_count', ascending=True)
     print(df[0:20])

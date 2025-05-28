@@ -66,7 +66,7 @@ class SalamiSlice(FloatTruncator):
         self.next_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
         self.next_rest_per_voice: list[SalamiSlice|None] = [None] * num_voices
                 
-        self.previous_any_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
+        self.previous_any_note_type_per_voice: list[SalamiSlice|None] = [None] * num_voices
         self.previous_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
         self.previous_rest_per_voice: list[SalamiSlice|None] = [None] * num_voices
 
@@ -93,7 +93,7 @@ class SalamiSlice(FloatTruncator):
         'next_any_note_per_voice',
         'next_note_per_voice',
         'next_rest_per_voice',
-        'previous_any_note_per_voice',
+        'previous_any_note_type_per_voice',
         'previous_note_per_voice',
         'previous_rest_per_voice',
         'chord_analysis',
@@ -205,7 +205,7 @@ class SalamiSlice(FloatTruncator):
                         analysis_result["root_note_voice"] = note.voice
                         break
                 else:
-                    raise ValueError(f"No note with root name '{root_name_m21}' found in sorted sounding notes: {[n.note_name for n in sounding_notes_pitch_order]}")
+                    raise ValueError(f"No note with root name '{root_name_m21}' found in sorted sounding notes: {[n.note_name for n in sounding_notes_voice_order]}")
             else:
                 raise ValueError("Music21 returned None for root pitch object")
                 analysis_result["root_note_name"] = "undetermined" # Could raise error if strictness demands

@@ -1,9 +1,12 @@
+# Manual additions
+*.krn
+*.txt
+src/merged/explore.ipynb
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-*.krn
-*.txt
 
 # C extensions
 *.so
@@ -171,3 +174,4 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+

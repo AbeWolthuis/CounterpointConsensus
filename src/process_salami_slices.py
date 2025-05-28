@@ -326,7 +326,7 @@ def set_chordal_properties(salami_slices: list[SalamiSlice]) -> list[SalamiSlice
         
         # If there is no root note voice, the slice has no notes.
         if root_note_voice is None:
-            
+            continue
 
         for voice_idx, note in enumerate(salami_slice.notes):
             if note.note_type == 'note':
@@ -428,7 +428,7 @@ def link_salami_slices(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
                     break
 
             # Assign the found slices to the current slice's attributes
-            cur_slice.previous_any_note_per_voice[voice_idx] = prev_slice_with_any_new_occ
+            cur_slice.previous_any_note_type_per_voice[voice_idx] = prev_slice_with_any_new_occ
 
             cur_slice.previous_note_per_voice[voice_idx] = prev_slice_with_note_new_occ
             cur_slice.previous_rest_per_voice[voice_idx] = prev_slice_with_rest_new_occ

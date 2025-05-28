@@ -4,11 +4,12 @@ INFINITY_BAR = 1e6
 
 # Duration mapping
 DURATION_MAP = {
-    '0': 2.0,  # Brevis 
-    '1': 1.0,  # Whole note
-    '2': 0.5,  # Half note
-    '4': 0.25,
-    '8': 0.125,
+    # The longa is encoded explicity in kern files, as two 0s, with a the user-specified 'l' (for longa) marker.
+    '0': 2.0,   # Brevis, spans one measure in mensural notation
+    '1': 1.0,   # Whole note
+    '2': 0.5,   # Half note
+    '4': 0.25,  # Quarter note
+    '8': 0.125, # Eighth note
     '16': 0.0625,
     '32': 0.03125, 
 }
@@ -84,7 +85,7 @@ TIME_SIGNATURE_STRONG_BEAT_MAP = {
             '1' : [1, 2], # 2 whole notes per bar
             '0' : [1],    # 2 brevis per bar
         }
-    }
+    }   
 
     # 9/0, 1;  6/0, 1;   *M3/2%3
 

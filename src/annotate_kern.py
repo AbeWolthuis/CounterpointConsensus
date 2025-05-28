@@ -19,8 +19,7 @@ def annotate_all_kern(kern_filepaths: list[str], destination_dir: str, all_metad
         overwrite (bool, optional): If True, overwrite existing annotated files. Defaults to False.
     """
     for jrpid, metadata in all_metadata.items():
-        if verbose:
-            print(f"Annotating {jrpid}...")
+        # if verbose: print(f"Annotating {jrpid}...")
         
         # Annotate the violations in a copy of the kern file
         src_path = metadata["src_path"]
@@ -59,7 +58,8 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
     
     Format:
     *  *color:red  *   *                         (color directive line)
-    !  !LO:TX:a:t=<rule_name1>, <rule_name2>  !   !  (text annotation line)
+    !  !LO:TX:a:t=<rule_id1>, <rule_id2>  !   !  (visible text annotation line with rule IDs)
+    !  !LO:TX:a:vis=0:color=none:t=(<rule_name1>, <note_names1>),   !   !  (invisible text with rule names & notes)
     <original line from source file>
     *  *color:black  *   *                       (reset color directive line)
     
@@ -96,21 +96,37 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
         for line_idx, line in enumerate(fin):
             # Check if there are violations for this line
             if line_idx in violations_to_line_voice_map:
-                # Create the text annotation line
-                comment_tokens = ["!"] * len(voice_sort_map) # Use '*' as default for interpretation lines
+                # Create both visible (rule IDs) and invisible (rule names) annotation lines
+                visible_comment_tokens = ["!"] * len(voice_sort_map)  # For rule IDs (visible)
+                invisible_comment_tokens = ["!"] * len(voice_sort_map)  # For rule names (invisible)
                 # Track which voices have violations, to color only those voices red
                 voices_with_violations = set()
 
                 for voice_idx, stored_violation_object in violations_to_line_voice_map[line_idx].items():
-                    descriptions_for_this_voice = []
-                    for v_obj in stored_violation_object: # v_obj is a RuleViolation object
-                        if use_rule_ids:
-                            descriptions_for_this_voice.append(str(v_obj.rule_id))
-                        else:
-                            descriptions_for_this_voice.append(v_obj.rule_name)
+                    rule_ids_for_this_voice = []
+                    rule_details_for_this_voice = []  # Will store (rule_name, note_names) pairs
                     
-                    descriptions_str = ", ".join(descriptions_for_this_voice)
-                    comment_tokens[voice_idx] = f"!LO:TX:a:t={descriptions_str}"
+                    for v_obj in stored_violation_object: # v_obj is a RuleViolation object
+                        rule_ids_for_this_voice.append(str(v_obj.rule_id))
+                        
+                        # Format note_names appropriately based on type
+                        note_names = v_obj.note_names
+                        if isinstance(note_names, tuple) or isinstance(note_names, list):
+                            formatted_notes = " ".join(str(n) for n in note_names)
+                        else:
+                            formatted_notes = str(note_names)
+                            
+                        # Add rule name with its associated note names
+                        rule_details_for_this_voice.append(f"({v_obj.rule_name}, {formatted_notes})")
+                    
+                    # Create visible comment with rule IDs
+                    rule_ids_str = ", ".join(rule_ids_for_this_voice)
+                    visible_comment_tokens[voice_idx] = f"!LO:TX:a:t={rule_ids_str}"
+                    
+                    # Create invisible comment with rule names and note names
+                    rule_details_str = "; ".join(rule_details_for_this_voice)
+                    invisible_comment_tokens[voice_idx] = f"!LO:TX:a:vis=0:color=none:t={rule_details_str}"
+                    
                     voices_with_violations.add(voice_idx)
 
                 # Create the color directive line (set affected voices to red)
@@ -121,9 +137,13 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
                 color_line = "\t".join(color_tokens) + "\n"
                 fout.write(color_line)
 
-                # Join the comment tokens with tabs and write after the color line
-                comment_line = "\t".join(comment_tokens) + "\n"
-                fout.write(comment_line)
+                # Write the visible comment line (rule IDs)
+                visible_comment_line = "\t".join(visible_comment_tokens) + "\n"
+                fout.write(visible_comment_line)
+                
+                # Write the invisible comment line (rule names with note names)
+                invisible_comment_line = "\t".join(invisible_comment_tokens) + "\n"
+                fout.write(invisible_comment_line)
 
                 # Write the original line
                 fout.write(line)

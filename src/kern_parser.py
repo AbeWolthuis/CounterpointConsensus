@@ -12,8 +12,9 @@ import cProfile, pstats
 ''' Our own modules '''
 from constants import DURATION_MAP, TRIPLET_DURATION_MAP, INFINITY_BAR, PITCH_TO_MIDI
 from counterpoint_rules import RuleViolation
-from data_preparation import violations_to_df
+from data_preparation import violations_to_df, sort_df_by_rule_id
 from annotate_kern import annotate_all_kern
+from data_preparation import find_jrp_files
 
 # These modules are changed often, so we force reload them every time.
 import Note
@@ -37,7 +38,8 @@ DEBUG2 = False
 
 metadata_template = {
     # JRP sepcified metadata
-    'COM': '', # composer 
+    'COM': '', # Composer 
+    'COA_entries': {},  # Will store all COA entries with their numbers
     'CDT': '', # Copmoser's dates record
     'jrpid': '', # josquin research project ID
     'attribution-level@Jos': '',
@@ -79,7 +81,7 @@ ignored_tokens = {
     'LL' : 'start-double-beam',
     'J' : 'end-beam',
     'JJ' : 'end-double-beam',
-
+    'y' : 'uncertain_character'
 }
 ignored_line_tokens = {}
 
@@ -101,7 +103,12 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
         for line_idx, line in enumerate(lines):
             # --- Metadata Parsing ---
             if line.startswith('!'):
-                if line[0:6] in metadata_linestarts_map.keys():
+                if line.startswith('!!!COA'):
+                    # Handle attributed composers, to be used instead of COM when COM is not present.
+                    coa_key = line.split(':')[0][3:]  # Extract "COA", "COA2", "COA3", etc.
+                    coa_value = line.split(':')[1].strip()
+                    metadata['COA_entries'][coa_key] = coa_value
+                elif line[0:6] in metadata_linestarts_map.keys():
                     # Splt '!!!jrpid: xxx' to 'jrpid',' xxx'
                     a = line.split(':')[0][0:6]
                     metadata_key, metadata_value = metadata_linestarts_map[a], line.split(':')[1].strip()
@@ -124,7 +131,16 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                     elif line[2] == "'": # ' represents short voice names
                         continue
                     elif line[2] == '"': # " represents long voice names
-                        voice_names = [voice_name.replace('*I"', '') for voice_name in line.split()]
+                        # Split on tabs to get each voice's full name token
+                        voice_tokens = line.strip().split('\t')
+                        voice_names = []
+                        
+                        for token in voice_tokens:
+                            if token.startswith('*I"'):
+                                # Remove the '*I"' prefix and keep the rest as the voice name
+                                voice_name = token[3:].replace(' ', '')  # Remove '*I"' (3 characters)
+                                voice_names.append(voice_name)
+                        
                         metadata['voice_names'] = voice_names
                         
                         # TODO: support voices changing during piececes count
@@ -151,6 +167,9 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                     continue
                 elif '*met' in line:
                     # TODO: check if we need to implement this later (mensural)
+                    continue
+                elif '*rscale' in line:
+                    # Rhythm scaling directive for rendering; notes seem to be encoded in a way that matches the other voices
                     continue
                 elif line.startswith(('**kern', '*staff', '*clef')):
                     # Ignored headers
@@ -187,13 +206,32 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
             else: 
                 note_section_with_indices.append((line_idx, line))
     
-    # Post-process the meta-data
-
+    ''' Post-process the meta-data. '''
+    
     metadata['voices'] = int(metadata['voices'])
 
-    # Parse the notes
+    # Handle composer attribution logic with priority
+    if not metadata['COM'] and metadata['COA_entries']:
+        # Find the highest priority COA entry
+        # Priority: COA > COA2 > COA3 > etc.
+        if 'COA' in metadata['COA_entries']:
+            # COA without number has highest priority
+            metadata['COM'] = metadata['COA_entries']['COA'] + " (COA)"
+        else:
+            # Find the lowest numbered COA entry
+            coa_numbers = []
+            for key in metadata['COA_entries'].keys():
+                if key.startswith('COA') and len(key) > 3:  # COA2, COA3, etc.
+                    try:
+                        num = int(key[3:])  # Extract number after "COA"
+                        coa_numbers.append(num)
+                    except ValueError:
+                        continue
+
+
+    ''' Parse the notes into salami slices. '''
     salami_slices = parse_note_section(note_section_with_indices, metadata)
-    print("Ties not implemented yet. Duplicate voice names not handled.")
+    print(" Duplicate voice names not handled. Linking of salami slices to previous next occurrence wrong, when the previous next occurrence is a tied note that is in the same bar as the start of that note. E.g. Jos1408, bar 28.")
 
 
     return salami_slices, metadata
@@ -236,30 +274,48 @@ def parse_note_section(note_section_with_indices: List[Tuple[int, str]], metadat
             
             # --- Set Tie Flags using flags_before_token and current_tie_open_flags ---
             prev_note = None
-            for prev_slice_idx in range(len(salami_slices)-1, -1, -1):
-                prev_slice = salami_slices[prev_slice_idx]
-                prev_note = prev_slice.notes[token_idx]
+            if len(salami_slices) > 0:
+                # Get the most recent slice and check if it has a note for this voice
+                prev_slice = salami_slices[-1]
+                if prev_slice.notes[token_idx] is not None:
+                    prev_note = prev_slice.notes[token_idx]
             
             is_tied_now = current_tie_open_flags[token_idx]
             was_tied_before = flags_before_token_processing[token_idx]
             a = 1
+
             # First, detect if this is a tie-start: a note is the start of a tie IF either of the following is true: 
             #   1) it is tied, and the previous note is not.
             #   2) it is tied, and the previous is a tie-end (in which case the previous note is allowed to be tied)
+
+            # Logic for determining tie properties:
+            # 1. Tie start: currently tied AND (wasn't tied before OR previous note had different pitch)
+            # 2. Tie end: not tied now AND was tied before. This note is also set as being tied.
+            # 3. Tie continuation: tied now AND was tied before AND same pitch as previous
+
+
             if is_tied_now and not was_tied_before: # and (prev_note.is_tied) and (not prev_note.is_tie_end) and (prev_note.midi_pitch == new_note.midi_pitch):
+                # This is the start of a new tie
                 new_note.is_tie_start = True
                 new_note.is_tied = True
-            elif is_tied_now and prev_note is not None:
-                if prev_note.is_tie_end:
+            elif is_tied_now and was_tied_before:
+                # Check if this continues the same pitch or starts a new tie
+                if (prev_note.is_tied) and (not prev_note.is_tie_end):
+                    # This is a continuation of a tie with the same pitch
+                    new_note.is_tied = True
+                else:
+                    # This is the start of a new tie (different pitch)
                     new_note.is_tie_start = True
                     new_note.is_tied = True
-            elif is_tied_now and was_tied_before:
-                # This is a continuation of a tie.
-                new_note.is_tied = True 
             # Detect tie-end
             elif not is_tied_now and was_tied_before:
                 new_note.is_tie_end = True
                 new_note.is_tied = True
+            elif not is_tied_now and not was_tied_before:
+                # This is not a tie, so we do not set any tie flags
+                pass
+            else:
+                raise ValueError(f"Unexpected tie state: is_tied_now={is_tied_now}, was_tied_before={was_tied_before}, prev_note={prev_note}, new_note={new_note}")
 
             
 
@@ -442,7 +498,7 @@ def kern_token_to_note(
                     tie_open_flags[token_idx] = False
                 if DEBUG: print(f"END of tie (char '{c}') in token '{kern_token}', at voice index '{token_idx}' in bar '{current_bar}'. Tie open flags: {tie_open_flags}.")
             elif c == '_':
-                # Middle of a tie: do not change tie open flags. This character is effectively skipped.
+                # Only relevant to longas and other special cases. Middle of a tie: do not change tie open flags. This character is effectively skipped most of the time, and not related to normal notes.
                 if tie_open_flags[token_idx] == False:
                     raise ValueError(f"Found unexpected middle of tie (char '{c}') in token '{kern_token}' in bar {current_bar}.'")
             # --- Longa, ignored tokens, errors ---
@@ -603,11 +659,24 @@ def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRules,
 
 
 if __name__ == "__main__":
+    ROOT_PATH = os.path.dirname(os.path.abspath(__file__))  # This is src/
+    PROJECT_ROOT = os.path.dirname(ROOT_PATH)               # Go up one level to CounterpointConsensus/
+    DATASET_PATH = os.path.join(PROJECT_ROOT, "data", "full", "more_than_10", "SELECTED")
+
+    valid_files = None
+    invalid_files = ['Bus3064', 'Bus3078', 'Com1002a', 'Com1002b', 'Com1002c', 'Com1002d', 'Com1002e', 'Duf2027a', 'Duf3015', 'Duf3080', 'Gas0204c', 'Gas0503', 'Gas0504', 'Jos0302e', 'Jos0303c', 'Jos0303e', 'Jos0304c', 'Jos0402d', 'Jos0402e', 'Jos0602e', 'Jos0603d', 'Jos0901e', 'Jos0902a', 'Jos0902b', 'Jos0902c', 'Jos0902d', 'Jos0902e', 'Jos0904a', 'Jos0904b', 'Jos0904d', 'Jos0904e', 'Jos1302', 'Jos1501', 'Jos1610', 'Jos1706', 'Jos1802', 'Jos2015', 'Jos2102', 'Jos2602', 'Jos3004', 'Jos9901a', 'Jos9901e', 'Jos9905', 'Jos9906', 'Jos9907a', 'Jos9907b', 'Jos9908', 'Jos9909', 'Jos9910', 'Jos9911', 'Jos9912', 'Jos9914', 'Jos9923', 'Mar1003c', 'Mar3040', 'Oke1003a', 'Oke1003b', 'Oke1003c', 'Oke1003d', 'Oke1003e', 'Oke1005a', 'Oke1005b', 'Oke1005c', 'Oke1005d', 'Oke1005e', 'Oke1010a', 'Oke1010b', 'Oke1010c', 'Oke1010d', 'Oke1010e', 'Oke1011d', 
+                     'Oke3025', 'Ort2005', 'Rue1007a', 'Rue1007b', 'Rue1007c', 'Rue1007d', 'Rue1007e', 'Rue1029a', 'Rue1029b', 'Rue1029c', 'Rue1029d', 'Rue1029e', 'Rue1035a', 'Rue1035b', 'Rue1035c', 'Rue1035d', 'Rue1035e', 'Rue2028', 'Rue2030', 'Rue2032', 'Rue3004', 'Rue3013', 'Tin3002']
+    manual_invalid_files = ['Jos0603a',]
+    invalid_files.extend(manual_invalid_files)
+
     # filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn")]
-    # filepaths = [os.path.join("..", "data", "test", "Jos1408-test.krn")]
-    filepaths = [os.path.join("..", "data", "test", "Rue1024a.krn")]
+    filepaths = [os.path.join("..", "data", "test", "Oke1014-Credo_Village.krn")]
+    # filepaths = [os.path.join("..", "data", "test", "Rue1024a.krn")]
     # filepaths = [os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")]
-    filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn"),os.path.join("..", "data", "test", "Rue1024a.krn"),os.path.join("..", "data", "test", "Oke1014-Credo_Village.krn")]
+    filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn"), os.path.join("..", "data", "test", "Rue1024a.krn"),os.path.join("..", "data", "test", "Oke1014-Credo_Village.krn")]
+
+    filepaths = find_jrp_files(DATASET_PATH, valid_files, invalid_files, anonymous_mode='skip')
+
 
     # profiler = cProfile.Profile()
     # profiler.enable()
@@ -617,48 +686,67 @@ if __name__ == "__main__":
     full_violations_df = pd.DataFrame()
 
     for filepath in filepaths:
-        
-        salami_slices, metadata = parse_kern(filepath)
-        salami_slices, metadata = post_process_salami_slices(
-            salami_slices, metadata, expand_metadata_flag=True
-        )
+        try:
+            salami_slices, metadata = parse_kern(filepath)
+            salami_slices, metadata = post_process_salami_slices(salami_slices, metadata, expand_metadata_flag=True)
 
-        # print('\nNotes with ties:\n')
-        # for sslice in salami_slices:
-        #     # if any(note.is_tied for note in sslice.notes):
-        #     if sslice.bar in [51, 52]:
-        #         print(sslice)
-        #         pass
-        #pprint(metadata)
-        #print(salami_slices)
+            # print('\nNotes with ties:\n')
+            # for sslice in salami_slices:
+            #     # if any(note.is_tied for note in sslice.notes):
+            #     if sslice.bar in [51, 52]:
+            #         print(sslice)
+            #         pass
+            #pprint(metadata)
+            #print(salami_slices)
 
-        cp_rules = CounterpointRules()
-        only_validate_rules = [
-            'interval_order_motion', 'longa_only_at_endings', 'leap_too_large',
-            #'leap_approach_left_opposite', 'tie_into_strong_beat', 'tie_into_weak_beat',
-            #'non_root_1st_inv_maj',
-        ]
+            cp_rules = CounterpointRules()
+            only_validate_rules = [
+                # Rhytm
+                #'brevis_at_begin_end', 'longa_only_at_endings', 
+                # Dots and ties
+                    #'tie_into_strong_beat', 'tie_into_weak_beat',
+                # Melody
+                    #'leap_too_large',  'leap_approach_left_opposite', 'interval_order_motion', 'successive_leap_opposite_direction', 
+                    # 'leap_up_accented_long_note',
+                # Other aspects
+                #   'eight_pair_stepwise',
+                # Quarter note idioms
+                'leap_in_quarters_balanced',
+                
+                # Chords
+                    #'non_root_1st_inv_maj', 
+                # Normalization functions
+                'norm_ties_contained_in_bar, '#'norm_label_chord_name_m21', #'norm_count_tie_ends', 'norm_count_tie_starts',
+            ]
 
-        violations = validate_all_rules(salami_slices, metadata, cp_rules, only_validate_rules)
-        curr_df = violations_to_df(violations, metadata)
-        if full_violations_df.empty:
-            full_violations_df = curr_df
-        else:
-            full_violations_df = pd.concat([full_violations_df, curr_df], ignore_index=True)
+            violations = validate_all_rules(salami_slices, metadata, cp_rules, only_validate_rules)
+            curr_df = violations_to_df(violations, metadata)
+            if full_violations_df.empty:
+                full_violations_df = curr_df
+            else:
+                full_violations_df = pd.concat([full_violations_df, curr_df], ignore_index=True)
 
-        print(f"\tJRP-ID: {metadata['jrpid']}")
-        pprint(violations)
-        
-        # Store the violations in a dict, with its JRP ID as the key.
-        # In order to annotate the violations in each piece later, we save metadata with the violations for each piece.
-        # In order to do so, remove the very large (and now unndeeded) key-sig info # TODO: also remove time-sigs
-        curr_jrpid = metadata['jrpid']
-        del metadata['key_signatures']
+            print(f"\tJRP-ID: {metadata['jrpid']}")
+            #pprint(violations)
+            
+            # Store the violations in a dict, with its JRP ID as the key.
+            # In order to annotate the violations in each piece later, we save metadata with the violations for each piece.
+            # In order to do so, remove the very large (and now unndeeded) key-sig info # TODO: also remove time-sigs
+            curr_jrpid = metadata['jrpid']
+            del metadata['key_signatures']
 
-        all_metadata[curr_jrpid] = metadata
-        all_violations[curr_jrpid] = violations
+            all_metadata[curr_jrpid] = metadata
+            all_violations[curr_jrpid] = violations
+        except Exception as e:
+            print('\n')
+            print(f"Error processing file {filepath}. \n\n")
+            raise e
+                  
+            
 
-    
+    # Sort the final DF
+    full_violations_df = sort_df_by_rule_id(full_violations_df)
+
     annotate_violations_flag = True
     if annotate_violations_flag:
         destination_dir = os.path.join("..", "data", "annotated")
