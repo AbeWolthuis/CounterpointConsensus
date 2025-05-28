@@ -81,7 +81,7 @@ def set_period_notes(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
                     # Note quality
                     note_type=prev_note.note_type,
                     is_new_occurence=False,  # Explicitly not a new occurrence
-                    is_triplet=prev_note.is_triplet,
+                    is_measured_differently=prev_note.is_measured_differently,
                     is_longa=prev_note.is_longa,
 
                     # Harmonic properties
@@ -208,6 +208,7 @@ def calculate_offsets(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
         # Get the minimum duration (for which the note is not a period note).
         # After that amount of time, the next slice will take place.
         time_step = min(leftover_durations)
+        
         if DEBUG2:
             # Find all indices with the minimum duration (to detect ties)
             min_indices = [i for i, d in enumerate(leftover_durations) if d == time_step]
@@ -223,7 +224,7 @@ def calculate_offsets(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
             slice_notes = ', '.join([note.compact_summary for note in cur_slice.notes if note.note_type == 'note'])
             print(f"Slice {slice_idx} ({slice_notes}) at bar {cur_slice.bar} has offset {cur_slice.offset} and time step {time_step} {tie_message} based on {min_duration_note.compact_summary}")
             print('\t',leftover_durations)
-            triplet_notes = [note.is_triplet for note in cur_slice.notes]
+            triplet_notes = [note.is_measured_differently for note in cur_slice.notes]
             if any(triplet_notes):
                 print(f"Triplet notes: {triplet_notes}")
 

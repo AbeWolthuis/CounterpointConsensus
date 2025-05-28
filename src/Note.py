@@ -276,9 +276,15 @@ class Note(FloatTruncator):
         'is_tie_end',
         'note_type',
         'is_new_occurrence', 
-        'is_triplet',
+
+        'is_measured_differently',      # True for any notes from tokens preceded by 'digit%digit, without V or Z present.
+        'is_triplet_start_through_V',   # True if this note is the first note of a triplet, denoted by V
+        'is_triplet_middle_between_VZ', # True if this note is the middle note of a triplet, inbetween a V and a Z.
+        'is_triplet_end_through_Z',     # True if this note is the last note of a triplet, denoted by Z
+
         'is_longa',
         'is_consonance',
+
         'absolute_interval_to_root',
         'reduced_interval_to_root',
         'voice',
@@ -302,7 +308,7 @@ class Note(FloatTruncator):
                 # Note quality
                 note_type: str|None = None,
                 is_new_occurence: bool = True,
-                is_triplet: bool = False,    
+                is_measured_differently: bool = False,    
                 is_longa: bool = False,  
 
                 # Harmonic properties
@@ -329,7 +335,7 @@ class Note(FloatTruncator):
         # Note quality
         self.note_type = note_type
         self.is_new_occurrence = is_new_occurence
-        self.is_triplet = is_triplet  
+        self.is_measured_differently = is_measured_differently  
         self.is_longa = is_longa
         # Properties for ease of processing
         self.voice = voice

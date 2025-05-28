@@ -246,8 +246,12 @@ def parse_note_section(note_section_with_indices: List[Tuple[int, str]], metadat
     # A per-voice tie tracker: one bool per voice
     current_tie_open_flags = [False] * int(metadata['voices'])
 
+    # Add tuplet trackers: one per voice to track if we're inside a V...Z tuplet
+    tuplet_open_flags = [False] * int(metadata['voices'])
+    tuplet_note_count = [0] * int(metadata['voices'])  # Count notes within each tuplet
 
-    for current_tuple_index, (original_line_idx, line) in enumerate(note_section_with_indices):
+
+    for index_of_line_tuple_in_note_section, (original_line_idx, line) in enumerate(note_section_with_indices):
         new_salami_slice = SalamiSlice(
             num_voices=int(metadata['voices']),
             bar = current_bar,
@@ -265,12 +269,28 @@ def parse_note_section(note_section_with_indices: List[Tuple[int, str]], metadat
             # Notice, current_tie_open_flags is updated IN PLACE due to passing it as a reference.
             # We create a shallow copy of the state of last round to preserve it comparing the current state to the previous state
             flags_before_token_processing = current_tie_open_flags[:]
+            tuplet_flags_before = tuplet_open_flags[:]
 
-            # Create a new note object for each token
-            new_note, accidental_trackers, current_tie_open_flags, current_bar = kern_token_to_note(
-                token,accidental_trackers, current_tie_open_flags, current_bar, token_idx, include_editorial_accidentals=True
+            # Create the new note objects by parsing the token and state of the flags
+            new_note, current_bar,            accidental_trackers, current_tie_open_flags, tuplet_open_flags, tuplet_note_count = kern_token_to_note(
+                token,current_bar, token_idx, accidental_trackers, current_tie_open_flags, tuplet_open_flags, tuplet_note_count, include_editorial_accidentals=True
             )
             
+            # --- Set tuplet flags based on the tuplet state changes ---
+            if new_note.note_type == 'note':
+                # Check if tuplet state changed for this voice
+                was_in_tuplet = tuplet_flags_before[token_idx]
+                is_in_tuplet = tuplet_open_flags[token_idx]
+                
+                if is_in_tuplet and not was_in_tuplet:
+                    # Just entered a tuplet - this is the start
+                    new_note.is_triplet_start_through_V = True
+                elif is_in_tuplet and was_in_tuplet:
+                    # Continue in tuplet - this is middle
+                    new_note.is_triplet_middle_between_VZ = True
+                elif not is_in_tuplet and was_in_tuplet:
+                    # Just exited tuplet - this is the end
+                    new_note.is_triplet_end_through_Z = True
             
             # --- Set Tie Flags using flags_before_token and current_tie_open_flags ---
             prev_note = None
@@ -334,7 +354,7 @@ def parse_note_section(note_section_with_indices: List[Tuple[int, str]], metadat
                 accidental_trackers = [dict(a=0, b=0, c=0, d=0, e=0, f=0, g=0) for _ in range(metadata['voices'])]
             if new_note.note_type == 'final_barline':
                 # # Check for remaining non-comment/metadata lines (thus: notes) after this one. That should not be possible,
-                remaining_lines_with_indices = note_section_with_indices[current_tuple_index + 1:]
+                remaining_lines_with_indices = note_section_with_indices[index_of_line_tuple_in_note_section + 1:]
                 for remaining_orig_idx, remaining_line in remaining_lines_with_indices:
                     if (not remaining_line.strip()) or (not remaining_line.startswith(('!', '*'))):
                         raise ValueError(f"Found unexpected line with notes or barlines after the final barline.: '{remaining_line}'")
@@ -350,12 +370,14 @@ def parse_note_section(note_section_with_indices: List[Tuple[int, str]], metadat
 
 def kern_token_to_note(
         kern_token: str,
+        current_bar: int,
+        token_idx: int, # Index of the current voice/token in the line; i.e. the voice (0-indexed)
         accidental_trackers: list[dict],
         tie_open_flags: list[bool],
-        current_bar: int,
-        token_idx: int,                         # Index of the current voice/token in the line; i.e. the voice (0-indexed)
+        tuplet_open_flags: list[bool],
+        tuplet_note_count: list[int],
         include_editorial_accidentals = True,
-    ) -> Tuple[Note, dict, list, int]:
+    ) -> Tuple[Note, int, list[dict], list[bool], list[bool], list[int]]:
     
     new_note = Note()
 
@@ -368,28 +390,32 @@ def kern_token_to_note(
                 new_note.duration = DURATION_MAP[c]
             elif c in TRIPLET_DURATION_MAP:
                 # Detect triplet format. E.g. '3%2.B-' or '6e'
-                if i+2 < len(kern_token) and kern_token[i+1] == '%':
-                    # splice 3%2
+                if i+2 < len(kern_token) and kern_token[i+1] == '%': # Detect a %, and splice 3%2 from the token
                     triplet_duration_token = kern_token[i:i+3].split('%') 
                     duration = TRIPLET_DURATION_MAP[triplet_duration_token[0]]
                     duration_modifier = triplet_duration_token[1] 
                     # Set the duration
                     new_note.duration = duration * int(duration_modifier)
                     
-                    # Set note as triplet
-                    new_note.is_triplet = True
+                    # Set note as having special duration encoding
+                    new_note.is_measured_differently = True
                     i += 2
-                elif i+1 < len(kern_token) and kern_token[i+1] in PITCH_TO_MIDI:
+                elif i+1 < len(kern_token) and kern_token[i+1] in PITCH_TO_MIDI: # Detect a triplet without a % sign, e.g. '6e' or '3e'.
                     # splice 6e
                     new_note.duration = TRIPLET_DURATION_MAP[c]
+                    new_note.is_measured_differently = True
                 else:
                     raise ValueError(f"Could not parse triplet duration '{c}' in token '{kern_token}'")
-
             elif c in PITCH_TO_MIDI:
                 ''' First, set the note without regarding accidentals. '''
                 pitch_token = c
                 new_note.note_type = 'note'
 
+                # Increment tuplet note count if we're in a tuplet
+                if tuplet_open_flags[token_idx]:
+                    tuplet_note_count[token_idx] += 1
+
+                ''' Parse the right pitch '''
                 # Check if this character repeats, and how many times (e.g. to get the pitch "CC" instead of just "C")
                 # This loop should stop when the a character is not the same as the previous character, or at the line end.
                 # We advance the looping variable i by pitch_token_len-1 (it gets increased by 1 always at the end of the loop)
@@ -432,11 +458,9 @@ def kern_token_to_note(
                 base_letter = pitch_token[0].upper()
                 new_note.spelled_name = f"{base_letter}{accidental_token}" + str(new_note.octave)
 
-
                 # If the pitch token len is only 1 (e.g. 1F), then we skip zero extra places over the increase i+=1 at the end of the loop.
                 # If it is longer, then skip that amount, plus any accidentals (if present).
                 i += pitch_token_len + accidental_token_len - 1
-
             elif c in accidentals:
                 raise NotImplementedError("Accidentals should be after notes only")
             elif c in ignored_tokens:
@@ -456,6 +480,16 @@ def kern_token_to_note(
                     new_note.duration *= 1.5**dot_count
 
                     i += dot_count - 1
+            elif c == 'V':
+                # Tuplet start marker 
+                new_note.is_tuplet_start = True
+                tuplet_open_flags[token_idx] = True
+                tuplet_note_count[token_idx] = 0  # Reset counter for new tuplet
+            elif c == 'Z':
+                # Tuplet end marker
+                new_note.is_tuplet_end = True
+                tuplet_open_flags[token_idx] = False
+                tuplet_note_count[token_idx] = 0  # Reset counter
             elif c == 'r':
                 new_note.note_type = 'rest'
             elif c == '=':
@@ -477,9 +511,7 @@ def kern_token_to_note(
                     
                     # Update the current bar number
                     new_note.bar_number = extracted_bar_number
-                    current_bar = extracted_bar_number
-
-                
+                    current_bar = extracted_bar_number                
                 # Skip to the end of the token
                 i += len(kern_token[i:]) - 1
             # --- Tie Flag Validation Logic ---
@@ -519,8 +551,7 @@ def kern_token_to_note(
     if new_note.duration is None:
         raise ValueError(f"Could not find duration for token '{kern_token}'")
 
-    # TODO: return the accidental tracker, because it is relevant for the entire measure
-    return new_note, accidental_trackers, tie_open_flags, current_bar
+    return new_note, current_bar, accidental_trackers, tie_open_flags, tuplet_open_flags, tuplet_note_count
 
 
 """Helper functions to parse all the different kinds of lines."""
@@ -670,12 +701,12 @@ if __name__ == "__main__":
     invalid_files.extend(manual_invalid_files)
 
     # filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn")]
-    filepaths = [os.path.join("..", "data", "test", "Oke1014-Credo_Village.krn")]
+    # filepaths = [os.path.join("..", "data", "test", "Oke1014-Credo_Village.krn")]
     # filepaths = [os.path.join("..", "data", "test", "Rue1024a.krn")]
     # filepaths = [os.path.join("..", "data", "test", "extra_parFifth_rue1024a.krn")]
     filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn"), os.path.join("..", "data", "test", "Rue1024a.krn"),os.path.join("..", "data", "test", "Oke1014-Credo_Village.krn")]
 
-    filepaths = find_jrp_files(DATASET_PATH, valid_files, invalid_files, anonymous_mode='skip')
+    # filepaths = find_jrp_files(DATASET_PATH, valid_files, invalid_files, anonymous_mode='skip')
 
 
     # profiler = cProfile.Profile()
@@ -706,8 +737,7 @@ if __name__ == "__main__":
                 # Dots and ties
                     #'tie_into_strong_beat', 'tie_into_weak_beat',
                 # Melody
-                    #'leap_too_large',  'leap_approach_left_opposite', 'interval_order_motion', 'successive_leap_opposite_direction', 
-                    # 'leap_up_accented_long_note',
+                    'leap_too_large',  'leap_approach_left_opposite', 'interval_order_motion', 'successive_leap_opposite_direction', 'leap_up_accented_long_note',
                 # Other aspects
                 #   'eight_pair_stepwise',
                 # Quarter note idioms
