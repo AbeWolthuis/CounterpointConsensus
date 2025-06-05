@@ -70,6 +70,9 @@ class CounterpointRules:
         
         'alto': 'alto',
         #'contratenor': 'alto',
+        'contratenor1': 'alto',
+        'contratenor2': 'alto',
+
         'contra': 'alto',
         'altus': 'alto',
         'contratenoraltus': 'alto',
@@ -388,7 +391,7 @@ class CounterpointRules:
 
         for voice_number, curr_note in enumerate(curr_slice.notes):
             prev_slice = curr_slice.previous_note_per_voice[voice_number]
-            # First check if this is a note, and if it has a previous slice with a new occurence (e.g. is not one of the first slices in the piece)
+            # First check if this is a note, and if it has a previous slice with a new occurrence (e.g. is not one of the first slices in the piece)
             if (curr_note.note_type == 'note') and (prev_slice is not None):
 
                 # Gather all relevant notes
@@ -415,10 +418,13 @@ class CounterpointRules:
                                 rule_name=rulename,
                                 rule_id=rule_id,
                                 slice_index=curr_slice_idx,
+                                original_line_num=curr_slice.original_line_num,
+                                beat=curr_slice.beat,
                                 bar=curr_slice.bar,
+                                voice_indices=voice_number,
                                 voice_names=metadata['voice_names'][voice_number],
-                                # voice_indices=voice_number,
-                                note_names=(prev_note.compact_summary, curr_note.compact_summary)
+                                # Notes in chronological order: prev_note -> curr_note
+                                note_names=(prev_note.note_name, curr_note.note_name)
                             ))
 
 
@@ -949,37 +955,9 @@ class CounterpointRules:
 
     """ %%% Normalization functions %%% """
     @staticmethod
-    def norm_count_tie_ends(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
-        """ Detect tie ends in the current slice. """
-        rule_id = '1002'
-
-        salami_slices = kwargs['salami_slices']
-        metadata = kwargs['metadata']
-        curr_slice_idx = kwargs["slice_index"]
-        curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
-        violations = []
-
-        for voice_number, curr_note in enumerate(curr_slice.notes):
-            # Check if current note is a tie end
-            if curr_note and curr_note.note_type == 'note' and curr_note.is_tie_end:
-                violations.append(RuleViolation(
-                    rule_name=rulename,
-                    rule_id=rule_id,
-                    slice_index=curr_slice_idx,
-                    original_line_num=curr_slice.original_line_num,
-                    beat=curr_slice.beat,
-                    bar=curr_slice.bar,
-                    voice_indices=voice_number,
-                    voice_names=metadata['voice_names'][voice_number],
-                    note_names=curr_note.note_name
-                ))
-
-        return violations
-    
-    @staticmethod
     def norm_count_tie_starts(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
         """ Detect tie ends in the current slice. """
-        rule_id = '1001'
+        rule_id = 'N1'
         
         salami_slices = kwargs['salami_slices']
         metadata = kwargs['metadata']
@@ -1004,11 +982,39 @@ class CounterpointRules:
 
         return violations
 
+    @staticmethod
+    def norm_count_tie_ends(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
+        """ Detect tie ends in the current slice. """
+        rule_id = 'N2'
+
+        salami_slices = kwargs['salami_slices']
+        metadata = kwargs['metadata']
+        curr_slice_idx = kwargs["slice_index"]
+        curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
+        violations = []
+
+        for voice_number, curr_note in enumerate(curr_slice.notes):
+            # Check if current note is a tie end
+            if curr_note and curr_note.note_type == 'note' and curr_note.is_tie_end:
+                violations.append(RuleViolation(
+                    rule_name=rulename,
+                    rule_id=rule_id,
+                    slice_index=curr_slice_idx,
+                    original_line_num=curr_slice.original_line_num,
+                    beat=curr_slice.beat,
+                    bar=curr_slice.bar,
+                    voice_indices=voice_number,
+                    voice_names=metadata['voice_names'][voice_number],
+                    note_names=curr_note.note_name
+                ))
+
+        return violations
+    
 
     @staticmethod
     def norm_label_chord_name_m21(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
         """ Labels m21 chord name """
-        rule_id = '1003'
+        rule_id = 'N3'
         
         salami_slices = kwargs['salami_slices']
         metadata = kwargs['metadata']
@@ -1053,7 +1059,7 @@ class CounterpointRules:
     @staticmethod
     def norm_ties_contained_in_bar(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
         """ Count ties that fall within a bar and do not cross a barline. """
-        rule_id = '1004'
+        rule_id = 'N4'
         
         salami_slices = kwargs['salami_slices']
         metadata = kwargs['metadata']
@@ -1103,3 +1109,37 @@ class CounterpointRules:
 
         return violations
 
+    @staticmethod
+    def norm_tie_end_not_new_occurrence(rulename, **kwargs) -> Dict[str, List[RuleViolation]]:
+        """ Count and label all new occurrence notes in the current slice. """
+        rule_id = 'N5'
+        
+        salami_slices = kwargs['salami_slices']
+        metadata = kwargs['metadata']
+        curr_slice_idx = kwargs["slice_index"]
+        curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
+        violations = []
+
+        for voice_number, curr_note in enumerate(curr_slice.notes):
+            # Check if current note is a new occurrence
+            if (curr_note and curr_note.note_type == 'note' and 
+                curr_note.midi_pitch != -1 and curr_note.is_new_occurrence and curr_note.is_tie_end):
+                
+                violations.append(RuleViolation(
+                    rule_name=rulename,
+                    rule_id=rule_id,
+                    slice_index=curr_slice_idx,
+                    original_line_num=curr_slice.original_line_num,
+                    beat=curr_slice.beat,
+                    bar=curr_slice.bar,
+                    voice_indices=voice_number,
+                    voice_names=metadata['voice_names'][voice_number],
+                    note_names=curr_note.note_name
+                ))
+
+        return violations
+
+    @staticmethod
+    def norm_section_and_piece_end():
+
+        return

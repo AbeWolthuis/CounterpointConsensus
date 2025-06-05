@@ -5,7 +5,7 @@ from collections import defaultdict
 from counterpoint_rules import RuleViolation
 
 
-def annotate_all_kern(kern_filepaths: list[str], destination_dir: str, all_metadata: dict[str, dict], all_violations: dict[str, list[RuleViolation]],
+def annotate_all_kern(destination_dir: str, all_metadata: dict[str, dict], all_violations: dict[str, list[RuleViolation]],
                         use_rule_ids: bool = True, overwrite: bool = True, maintain_jrp_structure: bool = True, verbose: bool = False,) -> None:
     """Annotate all kern files in the given list of file paths.
 
@@ -24,7 +24,7 @@ def annotate_all_kern(kern_filepaths: list[str], destination_dir: str, all_metad
         # Annotate the violations in a copy of the kern file
         src_path = metadata["src_path"]
 
-         # Decide the annotated filename
+        # Decide the annotated filename
         base_krn = os.path.basename(src_path)
         annotated_filename = f"annotated__{base_krn}"
         
@@ -71,11 +71,13 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
             print(f"Skipping {dst_path}: File exists and overwrite=False")
         return
     
+    # Create reverse mapping from analysis voice order back to original file voice order
+    voice_sort_map = metadata['voice_sort_map']
+    reverse_voice_map = {analysis_voice_idx:original_file_voice_idx for analysis_voice_idx, original_file_voice_idx in voice_sort_map.items()}
+    
     # Create a mapping of line numbers to RuleViolation objects for each voice.
     # This will look like: {line_num: {voice_index: [RuleViolation, RuleViolation, ...]}}
     violations_to_line_voice_map = defaultdict(lambda: defaultdict(list))
-    voice_sort_map = metadata['voice_sort_map']
-    reverse_voice_map = {v:k for k,v in voice_sort_map.items()}
 
     # Populate violations_to_line_voice_map
     for rule_name, rule_violations in violations.items():
@@ -87,26 +89,32 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
                 for voice_idx_from_violation in v.voice_indices:
                     original_voice_mapped_idx = reverse_voice_map[voice_idx_from_violation]
                     violations_to_line_voice_map[line_num][original_voice_mapped_idx].append(v) # Store the RuleViolation object
-            else:
+            elif isinstance(v.voice_indices, int):
                 original_voice_mapped_idx = reverse_voice_map[v.voice_indices]
                 violations_to_line_voice_map[line_num][original_voice_mapped_idx].append(v) # Store the RuleViolation object
+            else:
+                raise ValueError(f"Unexpected type for voice_indices: {type(v.voice_indices)}. Expected int or tuple.")
+
+    # Determine number of voices from original file structure
+    num_original_voices = len(metadata['unsorted_voice_order'])       
 
     # Go line-by-line, writing both comment lines and the original line
     with open(src_path, "r", encoding="utf-8") as fin, open(dst_path, "w", encoding="utf-8") as fout:
         for line_idx, line in enumerate(fin):
             # Check if there are violations for this line
             if line_idx in violations_to_line_voice_map:
-                # Create both visible (rule IDs) and invisible (rule names) annotation lines
-                visible_comment_tokens = ["!"] * len(voice_sort_map)  # For rule IDs (visible)
-                invisible_comment_tokens = ["!"] * len(voice_sort_map)  # For rule names (invisible)
+                # Create annotation lines for original file voice order
+                visible_comment_tokens = ["!"] * num_original_voices
+                invisible_comment_tokens = ["!"] * num_original_voices
                 # Track which voices have violations, to color only those voices red
                 voices_with_violations = set()
-
-                for voice_idx, stored_violation_object in violations_to_line_voice_map[line_idx].items():
+                
+                
+                for original_voice_idx, stored_violation_objects in violations_to_line_voice_map[line_idx].items():
                     rule_ids_for_this_voice = []
                     rule_details_for_this_voice = []  # Will store (rule_name, note_names) pairs
                     
-                    for v_obj in stored_violation_object: # v_obj is a RuleViolation object
+                    for v_obj in stored_violation_objects: # v_obj is a RuleViolation object
                         rule_ids_for_this_voice.append(str(v_obj.rule_id))
                         
                         # Format note_names appropriately based on type
@@ -120,14 +128,15 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
                         rule_details_for_this_voice.append(f"({v_obj.rule_name}, {formatted_notes})")
                     
                     # Create visible comment with rule IDs
+                    # Store it at the original voice index, since this corresponds to the original file's voice order
                     rule_ids_str = ", ".join(rule_ids_for_this_voice)
-                    visible_comment_tokens[voice_idx] = f"!LO:TX:a:t={rule_ids_str}"
+                    visible_comment_tokens[original_voice_idx] = f"!LO:TX:a:t={rule_ids_str}"
                     
                     # Create invisible comment with rule names and note names
                     rule_details_str = "; ".join(rule_details_for_this_voice)
-                    invisible_comment_tokens[voice_idx] = f"!LO:TX:a:vis=0:color=none:t={rule_details_str}"
+                    invisible_comment_tokens[original_voice_idx] = f"!LO:TX:a:vis=0:color=none:t={rule_details_str}"
                     
-                    voices_with_violations.add(voice_idx)
+                    voices_with_violations.add(original_voice_idx)
 
                 # Create the color directive line (set affected voices to red)
                 color_tokens = ["*"] * len(voice_sort_map)

@@ -303,11 +303,13 @@ class Note(FloatTruncator):
                 # New tie fields:
                 is_tied: bool = False,
                 is_tie_start: bool = False,
+                is_tie_continuation: bool = False,
                 is_tie_end: bool = False,
 
                 # Note quality
                 note_type: str|None = None,
-                is_new_occurence: bool = True,
+                was_originally_period: bool = False,  # True if this note was originally a period in the source file
+                is_new_occurrence: bool = True,               
                 is_measured_differently: bool = False,    
                 is_longa: bool = False,  
 
@@ -331,10 +333,12 @@ class Note(FloatTruncator):
         # Ties
         self.is_tied = is_tied
         self.is_tie_start = is_tie_start 
+        self.is_tie_continuation = is_tie_continuation
         self.is_tie_end = is_tie_end   
         # Note quality
         self.note_type = note_type
-        self.is_new_occurrence = is_new_occurence
+        self.is_new_occurrence = is_new_occurrence
+        self.was_originally_period = was_originally_period
         self.is_measured_differently = is_measured_differently  
         self.is_longa = is_longa
         # Properties for ease of processing

@@ -18,9 +18,9 @@ def post_process_salami_slices(salami_slices: list[SalamiSlice],
     salami_slices = set_voice_in_notes(salami_slices) # Set the voice in the notes (can bemerged into order_voices function)
     salami_slices = remove_barline_slice(salami_slices)
 
-    # Handle new occurences and ties
+    # Handle new occurrences and ties
     salami_slices = set_period_notes(salami_slices)
-    salami_slices = set_tied_notes_new_occurences(salami_slices)
+    salami_slices = set_tied_notes_new_occurrences(salami_slices)
     
     # Handle rhythmic properties
     salami_slices = calculate_offsets(salami_slices)  # Calculate raw offsets from bar start
@@ -31,12 +31,11 @@ def post_process_salami_slices(salami_slices: list[SalamiSlice],
     salami_slices = set_chordal_properties(salami_slices) 
 
 
-
     salami_slices = link_salami_slices(salami_slices)
 
-
     # Expand metadata to be per bar
-    if expand_metadata_flag: metadata = expand_metadata(metadata)  # Expand metadata to be per bar
+    if expand_metadata_flag:
+        metadata = expand_metadata(salami_slices, metadata)  # Expand metadata to be per bar
     
     return salami_slices, metadata
 
@@ -75,17 +74,22 @@ def set_period_notes(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
                     spelled_name=prev_note.spelled_name,
 
                     # Rhythm properties
-                    # bar # TODO: bar can change from the previous note
+                    bar=salami_slice.bar,  # Use current slice's bar, not previous note's bar
                     duration=prev_note.duration, # TODO: should be set to the duration of the slice, not the previous note
+
+                    # Tie properties
+                    # These should explicitly not be copied, since the period can denote a tie-continuation or a tie-end.
 
                     # Note quality
                     note_type=prev_note.note_type,
-                    is_new_occurence=False,  # Explicitly not a new occurrence
+                    was_originally_period=True,  # THIS note was originally a period
+                    is_new_occurrence=False,  # Explicitly not a new occurrence
+
                     is_measured_differently=prev_note.is_measured_differently,
                     is_longa=prev_note.is_longa,
 
                     # Harmonic properties
-                    # Are set later, for all notes
+                    # Are set later, for all notes. Naturally, they can vary as the note underneath the period note changes (by definition).
 
                     # Voice information
                     voice=prev_note.voice,
@@ -96,31 +100,167 @@ def set_period_notes(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
 
     return salami_slices
 
-def set_tied_notes_new_occurences(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
+def set_tied_notes_new_occurrences(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
     """ Set the new occurrences of tied notes to False """
     for i, salami_slice in enumerate(salami_slices):
         for voice, note in enumerate(salami_slice.notes):
             if note.note_type == 'rest':
                 # A rest is never tied, so we continue (the logic below does not handle this fact)
+                if note.was_originally_period:
+                    # If the rest was originally a period, we set it to not a new occurrence
+                    salami_slice.notes[voice].is_new_occurrence = False
                 continue
-            # If the note is a tie end, set the new occurrence to False
+            
+            # Period notes are never new occurrences, regardless of tie status
+            if note.was_originally_period:
+                salami_slice.notes[voice].is_new_occurrence = False
+
+            # Store original values for debugging
+            original_is_new_occurrence = note.is_new_occurrence
+            original_tie_start = note.is_tie_start
+            original_tie_end = note.is_tie_end
+            original_tie_continuation = note.is_tie_continuation
+            original_was_originally_period = note.was_originally_period
+            
+            # Apply tie logic - tie ends that are given as a new note (not a period) are labelled as NOT a new occurrence.
             if note.is_tie_end:
+                # Tie end are not new occurrences
                 salami_slice.notes[voice].is_new_occurrence = False
-            # If the note is a tie, but not a tie start, set the new occurrence to False
-            elif note.is_tied and not note.is_tie_start:
+            elif note.is_tie_continuation:
+                # Tie continuation notes are not new occurrences
                 salami_slice.notes[voice].is_new_occurrence = False
-            elif note.is_tie_start or not note.is_tied:
+            elif note.is_tie_start:
                 # If the note is a tie start, set the new occurrence to True
                 salami_slice.notes[voice].is_new_occurrence = True
             else:
-                raise ValueError(f"Note {note} in slice {i} is not a tie start, tie end or tied note")
+                # If none of the tie conditions apply, keep the current value
+                # (False for period notes, True for regular notes)
+                pass
+
+            # Debugging: Check for unexpected changes in tie logic. 
+            new_is_new_occurrence = salami_slice.notes[voice].is_new_occurrence
+            new_tie_start = salami_slice.notes[voice].is_tie_start
+            new_tie_end = salami_slice.notes[voice].is_tie_end
+            new_tie_continuation = salami_slice.notes[voice].is_tie_continuation
+            new_was_originally_period = salami_slice.notes[voice].was_originally_period
+            
+            # Check if tie properties changed (they shouldn't change in this function)
+            # Note: tie_end new occurrence status is expected to change, so dont check that one.
+            tie_properties_changed = (
+                original_tie_start != new_tie_start or
+                original_tie_end != new_tie_end or
+                original_tie_continuation != new_tie_continuation or
+                original_was_originally_period != new_was_originally_period
+            )
+
+            if tie_properties_changed:
+                raise ValueError(
+                    f"DEBUGGING ERROR: Tie properties changed unexpectedly for note in slice {i}, voice {voice}.\n"
+                    f"Note: {note}\n"
+                    f"Original tie flags: start={original_tie_start}, end={original_tie_end}, continuation={original_tie_continuation}, was_period={original_was_originally_period}\n"
+                    f"New tie flags: start={new_tie_start}, end={new_tie_end}, continuation={new_tie_continuation}, was_period={new_was_originally_period}\n"
+                    f"This function should only modify is_new_occurrence, not tie flags."
+                )
             
     return salami_slices
 
 
-
 def order_voices(salami_slices: list[SalamiSlice], metadata: dict[str, any]) -> tuple[list[SalamiSlice], dict[str, any]]:
-    """ Order the voices from low to high in the salami slices."""
+    """ Order the voices from high to low using pitch analysis. """
+    # Try the pitch-based approach first
+    try:
+        return order_voices_by_pitch_analysis(salami_slices, metadata)
+    except Exception as e:
+        print(f"Warning: Pitch-based voice ordering failed ({e}), falling back to name-based ordering")
+        return order_voices_by_name_legacy(salami_slices, metadata)
+    
+def order_voices_by_pitch_analysis(salami_slices: list[SalamiSlice], metadata: dict[str, any]) -> tuple[list[SalamiSlice], dict[str, any]]:
+    """ Order the voices from high to low based on pitch analysis of actual note content. """
+    
+    num_voices = len(metadata['voice_names'])
+    
+    # Collect pitch statistics for each voice
+    voice_pitch_stats = {}
+    for voice_idx in range(num_voices):
+        pitches = []
+        for slice_obj in salami_slices:
+            note = slice_obj.notes[voice_idx]
+            if note and note.note_type == 'note' and note.midi_pitch != -1:
+                pitches.append(note.midi_pitch)
+        
+        if pitches:
+            voice_pitch_stats[voice_idx] = {
+                'min_pitch': min(pitches),
+                'max_pitch': max(pitches),
+                'mean_pitch': sum(pitches) / len(pitches),
+                'note_count': len(pitches)
+            }
+        else:
+            # Voice has no notes - assign neutral values that won't interfere
+            voice_pitch_stats[voice_idx] = {
+                'min_pitch': 60,  # Middle C as neutral
+                'max_pitch': 60,
+                'mean_pitch': 60,
+                'note_count': 0
+            }
+    
+    # Determine voice ordering using the first and last voices as reference points
+    first_voice_idx = 0
+    last_voice_idx = num_voices - 1
+    
+    first_voice_stats = voice_pitch_stats[first_voice_idx]
+    last_voice_stats = voice_pitch_stats[last_voice_idx]
+    
+    # Determine which is higher by comparing pitch ranges
+    # Can raise ValueError if voices cannot be differentiated. The calling function will catch this and fall back to legacy ordering
+    first_voice_is_higher = _is_voice_higher(first_voice_stats, last_voice_stats)
+    
+    
+    # Determine voice order based on original ordering pattern
+    if first_voice_is_higher:
+        # Original order is highest to lowest (first voice is highest)
+        # Keep the original order: [0, 1, 2, 3, ...]
+        voice_order = list(range(num_voices))
+    else:
+        # Original order is lowest to highest (last voice is highest)
+        # Reverse the order to put highest first: [..., 3, 2, 1, 0]
+        voice_order = list(range(num_voices - 1, -1, -1))
+    
+    # Apply the reordering
+    metadata['voice_sort_map'] = {
+        new_idx: old_idx for new_idx, old_idx in enumerate(voice_order)
+    }
+    
+    # Store original voice order for reference
+    metadata['unsorted_voice_order'] = list(metadata['voice_names'])
+    
+    # Reorder the voices in the salami slices (highest voice at index 0)
+    for salami_slice in salami_slices:
+        salami_slice.notes = [salami_slice.notes[voice] for voice in voice_order]
+    
+    # Sort all other voice-dependent metadata
+    metadata['voice_names'] = [metadata['voice_names'][voice].lower() for voice in voice_order]
+    
+    # Reorder time signatures
+    reordered_time_signatures = []
+    for barline_tuple, timesigs in metadata['time_signatures']:
+        reordered_time_signatures.append(
+            (barline_tuple, [timesigs[v] for v in voice_order])
+        )
+    metadata['time_signatures'] = reordered_time_signatures
+    
+    # Store pitch analysis results for debugging
+    metadata['pitch_analysis'] = {
+        'original_voice_stats': voice_pitch_stats,
+        'first_voice_is_higher': first_voice_is_higher,
+        'final_voice_order': voice_order
+    }
+    
+    return salami_slices, metadata
+
+
+def order_voices_by_name_legacy(salami_slices: list[SalamiSlice], metadata: dict[str, any]) -> tuple[list[SalamiSlice], dict[str, any]]:
+    """ Legacy voice ordering by name (kept as fallback). """
 
     # First, map the voice_names to their order
     modern_names = [CounterpointRules.old_to_modern_voice_name_mapping[voice_name.strip().lower()] for voice_name in metadata['voice_names']]
@@ -135,20 +275,19 @@ def order_voices(salami_slices: list[SalamiSlice], metadata: dict[str, any]) -> 
     # Record the old voice names (new object, since the metadata dict will be modified)
     metadata['unsorted_voice_order'] = list(metadata['voice_names'])
 
+    # TODO: duplicate voice names now get an abitrary order?
     # Sort the voices according to the order of the voice names
     voice_order = sorted(
         range(len(modern_names)),
         key=lambda x: order_of_voice_names[modern_names[x]]
     )
     
-
     # Create a dictionary mapping new_position -> old_position.
     # E.g. if soprano is at index 3 in the old .krn, but we want it in new index 0,
     # then sorted_voice_order[0] = 3.
     metadata['voice_sort_map'] = {
         new_idx: old_idx for new_idx, old_idx in enumerate(voice_order)
     }
-    a = 1
 
     # Reorder the voices in the salami slices, and metadata. Highest voice at index 0.
     for salami_slice in salami_slices:
@@ -167,6 +306,8 @@ def order_voices(salami_slices: list[SalamiSlice], metadata: dict[str, any]) -> 
     metadata['time_signatures'] = reordered_time_signatures    
 
     return salami_slices, metadata
+
+
 
 def calculate_offsets(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
     """ Calculate the offset of each slice from the beginning of its bar. """
@@ -208,7 +349,7 @@ def calculate_offsets(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
         # Get the minimum duration (for which the note is not a period note).
         # After that amount of time, the next slice will take place.
         time_step = min(leftover_durations)
-        
+
         if DEBUG2:
             # Find all indices with the minimum duration (to detect ties)
             min_indices = [i for i, d in enumerate(leftover_durations) if d == time_step]
@@ -451,11 +592,14 @@ def get_subdivisions_for_timesig(numerator: int, denominator: int, division_per_
     # TODO: customize for certain time signatures
     return numerator * division_per_beat
 
-def expand_metadata(metadata: dict):
+def expand_metadata(salami_slices, metadata: dict):
     # Go from a list of changes in key-signatures / voice-counts / etc to a 
     # list where each index represents the bar number and the value is value at that bar.
     # Final data structure: [None, (2,1), (2,1), (3,1) ], which denotes no time-sig in bar 0, then 2/1 time-sig for bar 1&2, and a change into 3/1 at bar 3.
     
+    if metadata['jrpid'] in ['Bus100e']:
+        a = 1  # Debugging: this piece breaks on metadata expansion.
+
     # Metadata categories to be expanded
     convert_from_barline_tuple_to_expanded = ['time_signatures', 'key_signatures']
     for category in convert_from_barline_tuple_to_expanded:
@@ -473,4 +617,46 @@ def expand_metadata(metadata: dict):
         metadata[category] = expanded_values
 
     return metadata
+
+def _is_voice_higher(voice1_stats: dict, voice2_stats: dict) -> bool:
+    """
+    Determine if voice1 is higher than voice2 based on pitch statistics.
+    Uses multiple criteria with weighted scoring.
+    Raises ValueError if voices cannot be differentiated (tied score).
+    """
+    score = 0
+    
+    # Criterion 1: Mean pitch (most important)
+    if voice1_stats['mean_pitch'] > voice2_stats['mean_pitch']:
+        score += 3
+    elif voice1_stats['mean_pitch'] < voice2_stats['mean_pitch']:
+        score -= 3
+    
+    # Criterion 2: Maximum pitch
+    if voice1_stats['max_pitch'] > voice2_stats['max_pitch']:
+        score += 2
+    elif voice1_stats['max_pitch'] < voice2_stats['max_pitch']:
+        score -= 2
+    
+    # Criterion 3: Minimum pitch
+    if voice1_stats['min_pitch'] > voice2_stats['min_pitch']:
+        score += 1
+    elif voice1_stats['min_pitch'] < voice2_stats['min_pitch']:
+        score -= 1
+    
+    # Handle tie case explicitly
+    if score == 0:
+        raise ValueError(
+            f"Cannot determine voice hierarchy: tied score between voices.\n"
+            f"Voice 1 stats: {voice1_stats}\n"
+            f"Voice 2 stats: {voice2_stats}\n"
+            f"Both voices have identical or perfectly balanced pitch characteristics."
+        )
+    
+    return score > 0
+
+
+
+
+
 
