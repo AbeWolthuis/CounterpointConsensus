@@ -37,7 +37,6 @@ def annotate_all_kern(destination_dir: str, all_metadata: dict[str, dict], all_v
         else:
             dst_path = os.path.join(destination_dir, annotated_filename)
 
-
         # Get the rule violations for this piece
         violations = all_violations[jrpid]
 
@@ -93,19 +92,23 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
                 original_voice_mapped_idx = reverse_voice_map[v.voice_indices]
                 violations_to_line_voice_map[line_num][original_voice_mapped_idx].append(v) # Store the RuleViolation object
             else:
-                raise ValueError(f"Unexpected type for voice_indices: {type(v.voice_indices)}. Expected int or tuple.")
-
-    # Determine number of voices from original file structure
-    num_original_voices = len(metadata['unsorted_voice_order'])       
+                raise ValueError(f"Unexpected type for voice_indices: {type(v.voice_indices)}. Expected int or tuple.")    # Determine number of voices from original file structure
+    num_original_voices = len(metadata['unsorted_voice_order'])
+    
+    # Calculate total number of columns in original file (kern + text)
+    if metadata.get('has_text_columns', False):
+        total_columns = len(metadata['note_column_indices']) + len(metadata['text_column_indices'])
+    else:
+        total_columns = num_original_voices
 
     # Go line-by-line, writing both comment lines and the original line
     with open(src_path, "r", encoding="utf-8") as fin, open(dst_path, "w", encoding="utf-8") as fout:
         for line_idx, line in enumerate(fin):
             # Check if there are violations for this line
             if line_idx in violations_to_line_voice_map:
-                # Create annotation lines for original file voice order
-                visible_comment_tokens = ["!"] * num_original_voices
-                invisible_comment_tokens = ["!"] * num_original_voices
+                # Create annotation lines for original file structure (including text columns)
+                visible_comment_tokens = ["!"] * total_columns
+                invisible_comment_tokens = ["!"] * total_columns
                 # Track which voices have violations, to color only those voices red
                 voices_with_violations = set()
                 
@@ -126,22 +129,35 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
                             
                         # Add rule name with its associated note names
                         rule_details_for_this_voice.append(f"({v_obj.rule_name}, {formatted_notes})")
-                    
-                    # Create visible comment with rule IDs
-                    # Store it at the original voice index, since this corresponds to the original file's voice order
+                      # Create visible comment with rule IDs
+                    # Map to correct column position in original file
                     rule_ids_str = ", ".join(rule_ids_for_this_voice)
-                    visible_comment_tokens[original_voice_idx] = f"!LO:TX:a:t={rule_ids_str}"
+                    if metadata.get('has_text_columns', False):
+                        # For text columns, we need to map to the kern column position
+                        kern_column_idx = metadata['note_column_indices'][original_voice_idx]
+                        visible_comment_tokens[kern_column_idx] = f"!LO:TX:a:t={rule_ids_str}"
+                    else:
+                        visible_comment_tokens[original_voice_idx] = f"!LO:TX:a:t={rule_ids_str}"
                     
                     # Create invisible comment with rule names and note names
                     rule_details_str = "; ".join(rule_details_for_this_voice)
-                    invisible_comment_tokens[original_voice_idx] = f"!LO:TX:a:vis=0:color=none:t={rule_details_str}"
+                    if metadata.get('has_text_columns', False):
+                        # For text columns, we need to map to the kern column position
+                        kern_column_idx = metadata['note_column_indices'][original_voice_idx]
+                        invisible_comment_tokens[kern_column_idx] = f"!LO:TX:a:vis=0:color=none:t={rule_details_str}"
+                    else:
+                        invisible_comment_tokens[original_voice_idx] = f"!LO:TX:a:vis=0:color=none:t={rule_details_str}"
                     
-                    voices_with_violations.add(original_voice_idx)
-
-                # Create the color directive line (set affected voices to red)
-                color_tokens = ["*"] * len(voice_sort_map)
+                    voices_with_violations.add(original_voice_idx)                # Create the color directive line (set affected voices to red)
+                color_tokens = ["*"] * total_columns
                 for voice_idx in voices_with_violations:
-                    color_tokens[voice_idx] = "*color:red"
+                    # Map voice index to correct column position in original file
+                    if metadata.get('has_text_columns', False):
+                        # For text columns, we need to map to the kern column position
+                        kern_column_idx = metadata['note_column_indices'][voice_idx]
+                        color_tokens[kern_column_idx] = "*color:red"
+                    else:
+                        color_tokens[voice_idx] = "*color:red"
                 
                 color_line = "\t".join(color_tokens) + "\n"
                 fout.write(color_line)
@@ -156,11 +172,16 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
 
                 # Write the original line
                 fout.write(line)
-                
-                # Create the reset color directive line (set affected voices back to black)
-                reset_tokens = ["*"] * len(voice_sort_map)
+                  # Create the reset color directive line (set affected voices back to black)
+                reset_tokens = ["*"] * total_columns
                 for voice_idx in voices_with_violations:
-                    reset_tokens[voice_idx] = "*color:black"
+                    # Map voice index to correct column position in original file
+                    if metadata.get('has_text_columns', False):
+                        # For text columns, we need to map to the kern column position
+                        kern_column_idx = metadata['note_column_indices'][voice_idx]
+                        reset_tokens[kern_column_idx] = "*color:black"
+                    else:
+                        reset_tokens[voice_idx] = "*color:black"
                 
                 reset_line = "\t".join(reset_tokens) + "\n"
                 fout.write(reset_line)

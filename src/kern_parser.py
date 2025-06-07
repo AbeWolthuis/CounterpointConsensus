@@ -32,7 +32,6 @@ from counterpoint_rules import CounterpointRules
 from process_salami_slices import post_process_salami_slices
 
 
-    
 DEBUG = False
 DEBUG2 = False
 
@@ -84,7 +83,9 @@ ignored_tokens = {
     'J' : 'end_beam',
     'JJ' : 'end_double_beam',
     'y' : 'uncertain_character',
+    'X' : 'editorial_interpretation',
     'N' : 'signum_congruentiae'
+
 }
 ignored_line_tokens = {}
 
@@ -133,21 +134,19 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                 
                 text_detection_done = True
                 continue
-            
-            # --- Filter text tokens from ALL subsequent lines (if text columns detected) ---
-            if has_text_columns and not line.startswith(('!', '=')):
+              # --- Filter text tokens from ALL subsequent lines (if text columns detected) ---
+            if has_text_columns and not line.startswith('!'):
                 # For metadata lines (*), barlines (=), and note lines - filter out text tokens
-                if line.startswith('*') or not line.startswith(('!', '=')):
-                    all_tokens = line.strip().split('\t')
-                    expected_tokens = len(note_column_indices) + len(text_column_indices)
-                    
-                    # Only apply filtering if we have the expected number of tokens
-                    if len(all_tokens) == expected_tokens:
-                        # Extract only note tokens, ignoring text tokens
-                        note_tokens = [all_tokens[i] for i in note_column_indices]
-                        # Reconstruct line with only note tokens
-                        line = '\t'.join(note_tokens) + '\n'
-                    # If token count doesn't match, let the line pass through for normal error handling
+                all_tokens = line.strip().split('\t')
+                expected_tokens = len(note_column_indices) + len(text_column_indices)
+                
+                # Only apply filtering if we have the expected number of tokens
+                if len(all_tokens) == expected_tokens:
+                    # Extract only note tokens, ignoring text tokens
+                    note_tokens = [all_tokens[i] for i in note_column_indices]
+                    # Reconstruct line with only note tokens
+                    line = '\t'.join(note_tokens) + '\n'
+                # If token count doesn't match, let the line pass through for normal error handling
             
             # --- Metadata Parsing ---
             if line.startswith('!'):
@@ -169,6 +168,7 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                     # Record the start of the new section
                     metadata['section_starts'].append(bar_count)
             elif line.startswith('*'):
+                # Parse voice names
                 if line.startswith('*I'):
                     # If diffferent voices are partway through the piece, raise an error
                     if bar_count > 0:
@@ -196,11 +196,11 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                         # metadata['voice_names'].append((barline_tuple, voice_names)))}) does not match voices count ({metadata['voices']})")
                     else:
                         raise NotImplementedError("Something in parsing voices (*I) not yet implemented.")
+                # Parse key signatures for all voices
                 elif line.startswith('*k'):
-                    # Parse key signatures for all voices
                     metadata_dict = parse_keysig(line, metadata, bar_count, line_idx)
                     if DEBUG: print(f"Found key signatures at bar {bar_count}: {metadata_dict['key_signatures'][-1][1]}")
-                        
+                # Parse time signatures for all voices  
                 elif '*M' in line:
                     # Check if any token starts with *M but not *MM (more robust - checks for *M anywhere in line)
                     tokens = line.strip().split('\t')
@@ -235,15 +235,13 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                     # Tablature information - can be ignored for counterpoint analysis
                     continue
                 else:
-                    raise NotImplementedError(f"Some metadata starting with * not yet implemented. Line {line_idx}: {line}")
-            # --- Barline Handling ---
+                    raise NotImplementedError(f"Some metadata starting with * not yet implemented. Line {line_idx}: {line}")            # --- Barline Handling ---
             elif line.startswith('='):
                 # Check if this is a visual barline without bar numbers FIRST (e.g., "=", "=-", "==")
-                # Extract only digits from the first barline token, but first remove trailing minus for invisible barlines
+                # Extract only digits from the first barline token after stripping all visual markers
                 first_token = line.split()[0] if line.split() else line.strip().split('\t')[0]
                 
-                # Remove trailing minus (invisible barline marker) before extracting digits
-                cleaned_token = first_token.rstrip('-')
+                cleaned_token = strip_visual_markers(first_token)
                 digits_only = ''.join(c for c in cleaned_token if c.isdigit())
                 
                 if not digits_only:
@@ -253,11 +251,11 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                 
                 # If we reach here, it's a numbered barline (visible or invisible) - now do consistency checks
                 if has_text_columns:
-                    # Validate that all barline tokens are identical (after filtering)
+                    # Validate that all barline tokens are identical after stripping visual markers
                     note_tokens = line.strip().split('\t')
                     if len(note_tokens) > 1:
-                        first_barline = note_tokens[0]
-                        if not all(token == first_barline for token in note_tokens):
+                        first_barline_clean = strip_visual_markers(note_tokens[0])
+                        if not all(strip_visual_markers(token) == first_barline_clean for token in note_tokens):
                             raise ValueError(f"Inconsistent barline tokens at line {line_idx}: {note_tokens}")
                 
                 # Update bars according to the barnumber found
@@ -339,6 +337,8 @@ def parse_note_section(note_section_with_indices: List[Tuple[int, str]], metadat
             original_line_num=original_line_idx,
         )        
 
+        
+
         tokens = line.split()
         # Check token count consistency (only for non-barlines)
         if len(tokens) != metadata['voices'] and not line.startswith('='):
@@ -385,8 +385,7 @@ def parse_note_section(note_section_with_indices: List[Tuple[int, str]], metadat
             is_tied_now = current_tie_open_flags[token_idx]
             was_tied_before = flags_before_token_processing[token_idx]
         
-            if current_bar == 6 and 'c' in line:
-                a = 1
+
 
             # First, detect if this is a tie-start: a note is the start of a tie IF either of the following is true: 
             #   1) it is tied, and the previous note is not.
@@ -557,53 +556,7 @@ def kern_token_to_note(
                 # Skip over all the parsed components
                 i += pitch_token_len + accidental_token_len + editorial_len - 1
 
-                if False:
-                    ''' Parse the right pitch '''
-                    # Check if this character repeats, and how many times (e.g. to get the pitch "CC" instead of just "C")
-                    # This loop should stop when the a character is not the same as the previous character, or at the line end.
-                    # We advance the looping variable i by pitch_token_len-1 (it gets increased by 1 always at the end of the loop)
-                    pitch_token_len = 1
-                    while (i+pitch_token_len < len(kern_token)) and kern_token[i+pitch_token_len] == c:
-                        pitch_token += c
-                        pitch_token_len += 1
-
-                    new_note.midi_pitch = PITCH_TO_MIDI[pitch_token]
-
-                    ''' Check for new accidentals after the pitch. '''
-                    accidental_token = ''
-                    accidental_token_len = 0
-
-                    if (i+pitch_token_len < len(kern_token)) and kern_token[i+pitch_token_len].lower() in accidentals:
-                        # Check if the accidental is followed by another accidental
-                        accidental_token = kern_token[i+pitch_token_len]
-                        accidental_token_len = 1
-                        # TODO: this indexing might be wrong; where is the note compared to the accidental?
-                        while (i+pitch_token_len+accidental_token_len < len(kern_token)) and kern_token[i+pitch_token_len+accidental_token_len] == c:
-                            accidental_token += c
-                            accidental_token_len += 1
-
-                        # Store which note the accidental applies to. E.g., the sharp on 'CC#' is stored under 'c':1 in the accidental_tracker.
-                        accidental_trackers[token_idx][pitch_token[0].lower()] = accidentals[accidental_token]
-
-                    ''' Apply the accidental. If it is not set, it is 0 (by default). '''  
-                    new_note.midi_pitch += accidental_trackers[token_idx][pitch_token[0].lower()]
-
-                    ''' Handle editorial accidentals. '''
-                    # By default, we include editorial accidentals, and thus skip the editorial token "i".
-                    if include_editorial_accidentals:
-                        if (i+pitch_token_len+accidental_token_len < len(kern_token)) and kern_token[i+pitch_token_len+accidental_token_len] == 'i':
-                            i += 1
-                    else:
-                        raise NotImplementedError("Not using editorial accidentals is not yet implemented.")
-
-                    # **Set the spelled note name**
-                    new_note.octave = new_note.midi_pitch // 12 # integer division to get the octave
-                    base_letter = pitch_token[0].upper()
-                    new_note.spelled_name = f"{base_letter}{accidental_token}" + str(new_note.octave)
-
-                    # If the pitch token len is only 1 (e.g. 1F), then we skip zero extra places over the increase i+=1 at the end of the loop.
-                    # If it is longer, then skip that amount, plus any accidentals (if present).
-                    i += pitch_token_len + accidental_token_len - 1
+                
             elif c in accidentals:
                 raise NotImplementedError("Accidentals should be after notes only")
             elif c in ignored_tokens:
@@ -709,6 +662,20 @@ def kern_token_to_note(
 
 
 """Helper functions to parse all the different kinds of lines."""
+# Helper functions
+def strip_visual_markers(token):
+    """Strip visual markers from barline tokens for proper comparison.
+    
+    Args:
+        token (str): The barline token to clean
+        
+    Returns:
+        str: The cleaned token with visual markers removed
+    """
+    # Remove visual markers: ., |, !, ", ', `, and trailing -
+    cleaned = token.rstrip('-')  # Remove trailing minus (invisible barline)
+    cleaned = cleaned.strip('.|!"\'`')  # Remove other visual markers
+    return cleaned
 
 def parse_timesig(line: str, metadata: dict, bar_count: int) -> dict:
     """ Parse a time signature token and update the metadata dict """
@@ -783,40 +750,47 @@ def parse_keysig(line: str, metadata: dict, bar_count: int, line_idx: int) -> di
     if DEBUG: print(f"Keysig tokens: {' '.join(keysig_tokens)} at line {line_idx}")
      
     if len(keysig_tokens) != int(metadata['voices']):
-        raise ValueError(f"Line {line_idx} JRP-ID '{metadata['jrpid']}' has {len(keysig_tokens)} key signature tokens but metadata specifies {metadata['voices']} voices: '{line.strip()}'")
-
-    # Parse each voice's key signature
+        raise ValueError(f"Line {line_idx} JRP-ID '{metadata['jrpid']}' has {len(keysig_tokens)} key signature tokens but metadata specifies {metadata['voices']} voices: '{line.strip()}'")    # Parse each voice's key signature
     key_signatures = []
     for token_idx, token in enumerate(keysig_tokens):
-        if not token.startswith('*k['):
-            raise ValueError(f"Invalid key signature token '{token}' in voice {token_idx + 1} at line {line_idx}. Expected token to start with '*k['.")
-        
-        # Parse the key signature
-        keysig_token_content = token[3:]  # Remove *k[ from the start
-        key_signature = {k:v for k,v in key_signature_template.items()}
-        i = 0 
-        while i < len(keysig_token_content):
-            c = keysig_token_content[i]
-            if c == ']':
-                break
-            elif c in key_signature.keys():
-                # Check for accidental modifiers like '+' or '-'
-                if i + 1 < len(keysig_token_content):
-                    next_char = keysig_token_content[i+1]
-                    if next_char == '+':
-                        key_signature[c] += 1
-                        i += 1 # Move past the '+'
-                    elif next_char == '-':
-                        key_signature[c] -= 1
-                        i += 1 # Move past the '-'
-                # If no modifier, it's just the note name, handled by the outer loop's increment
-            elif c in ['+', '-']:
-                # This case should ideally be handled by the above, but as a safeguard:
-                raise ValueError(f"Could not parse key signature '{keysig_token_content}', reached accidental '{c}' unexpectedly at char index {i}.")
+        if token == '*':
+            # '*' token indicates unchanged key signature - use the previous key signature for this voice
+            if metadata['key_signatures']:
+                # Get the most recent key signature for this voice
+                previous_key_signature = metadata['key_signatures'][-1][1][token_idx]
+                key_signatures.append(previous_key_signature)
             else:
-                raise ValueError(f"Could not parse char '{c}' in key signature content '{keysig_token_content}' at char index {i}.")
-            i += 1
-        key_signatures.append(key_signature)
+                # If no previous key signature, use empty key signature (no accidentals)
+                key_signatures.append({k:v for k,v in key_signature_template.items()})
+        elif token.startswith('*k['):
+            # Parse the key signature
+            keysig_token_content = token[3:]  # Remove *k[ from the start
+            key_signature = {k:v for k,v in key_signature_template.items()}
+            i = 0 
+            while i < len(keysig_token_content):
+                c = keysig_token_content[i]
+                if c == ']':
+                    break
+                elif c in key_signature.keys():
+                    # Check for accidental modifiers like '+' or '-'
+                    if i + 1 < len(keysig_token_content):
+                        next_char = keysig_token_content[i+1]
+                        if next_char == '+':
+                            key_signature[c] += 1
+                            i += 1 # Move past the '+'
+                        elif next_char == '-':
+                            key_signature[c] -= 1
+                            i += 1 # Move past the '-'
+                    # If no modifier, it's just the note name, handled by the outer loop's increment
+                elif c in ['+', '-']:
+                    # This case should ideally be handled by the above, but as a safeguard:
+                    raise ValueError(f"Could not parse key signature '{keysig_token_content}', reached accidental '{c}' unexpectedly at char index {i}.")
+                else:
+                    raise ValueError(f"Could not parse char '{c}' in key signature content '{keysig_token_content}' at char index {i}.")
+                i += 1
+            key_signatures.append(key_signature)
+        else:
+            raise ValueError(f"Invalid key signature token '{token}' in voice {token_idx + 1} at line {line_idx}. Expected '*' or token starting with '*k['.")
 
     # Record the bar number of this change
     last_metadata_update_bar = bar_count

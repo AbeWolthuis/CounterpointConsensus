@@ -1,6 +1,7 @@
 import os
 import cProfile
 import pandas as pd
+import traceback
 
 from pprint import pprint
 from IPython.display import display
@@ -21,8 +22,9 @@ def main():
     # --- Configurations ---
     CONTINUE_ON_ERROR = True  # Set to False to break on first error
     BREAK_EARLY = True
-    BREAK_COUNT = 50
+    BREAK_COUNT = 120
     SKIP_SUCCESSFUL_FILES = True  # Flag to control skipping successfully processed files
+    VERBOSE = True
 
     # --- Load kern
     ROOT_PATH = os.path.dirname(os.path.abspath(__file__))  # This is src/
@@ -44,11 +46,11 @@ def main():
     # filepaths.extend([os.path.join("..", "data", "test", "Rue1024a.krn")]); filepaths = filepaths[::-1]  # Reverse the list to process in reverse order
     filepaths = [os.path.join("..", "data", "test", "Rue1024a.krn"), 
                 #  "c:/Users/T460/Documents/Uni_spul/Jaar_7/Scriptie/CounterpointConsensus2/CounterpointConsensus/data/full/more_than_10/SELECTED/Bus/Bus1001e-Missa_Lhomme_arme-Agnus.krn"
-                r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Bus\Bus2003-Anima_mea_liquefacta_est__Stirips_Jesse.krn',
-                r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Bus\Bus3001-Acordes_moy.krn'
+                #r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Bus\Bus2003-Anima_mea_liquefacta_est__Stirips_Jesse.krn',
+                r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Com\Com2002a-Hodie_nobis_cycle-Hodie_nobis.krn'
                 ]
 
-    filepaths = find_jrp_files(DATASET_PATH, valid_files, invalid_files, anonymous_mode='skip')
+    # filepaths = find_jrp_files(DATASET_PATH, valid_files, invalid_files, anonymous_mode='skip')
 
     # File tracking setup
     successful_files_log = os.path.join("..", "output", "successful_files.txt")
@@ -144,8 +146,56 @@ def main():
         except Exception as e:
             error_message = str(e)
             error_type = type(e).__name__
+
+
             
-            print(f"\t✗ ERROR in {filename_no_ext}. {error_type}: {error_message}")
+            # Enhanced error reporting for IndexError
+            if isinstance(e, IndexError) and VERBOSE:
+                filename = os.path.basename(filepath)
+                filename_no_ext = filename.split('-')[0] if '-' in filename else filename.split('.')[0]
+                
+                print(f"\t  📍 IndexError in {filename_no_ext}: {str(e)}")
+                
+                # Try to find the exact problematic kern file line
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        kern_lines = [line.rstrip('\n') for line in f.readlines()]
+                    
+                    # Look for 'original_line_idx' in traceback frames
+                    problematic_kern_line_num = None
+                    tb_obj = e.__traceback__
+                    
+                    while tb_obj:
+                        local_vars = tb_obj.tb_frame.f_locals
+                        if 'original_line_idx' in local_vars:
+                            line_val = local_vars['original_line_idx']
+                            if isinstance(line_val, int) and 0 <= line_val < len(kern_lines):
+                                problematic_kern_line_num = line_val + 1  # +1 for 1-based
+                                break
+                        tb_obj = tb_obj.tb_next
+                    
+                    # Show the problematic line with context
+                    if problematic_kern_line_num:
+                        line_content = kern_lines[problematic_kern_line_num - 1]
+                        print(f"\t  🎯 Kern line {problematic_kern_line_num}: '{line_content}'")
+                        
+                        # Show minimal context (1 line before/after)
+                        start_ctx = max(1, problematic_kern_line_num - 1)
+                        end_ctx = min(len(kern_lines), problematic_kern_line_num + 1)
+                        
+                        for line_num in range(start_ctx, end_ctx + 1):
+                            line_text = kern_lines[line_num - 1]
+                            marker = ">>>" if line_num == problematic_kern_line_num else "   "
+                            print(f"\t    {marker} {line_num}: {line_text}")
+                    else:
+                        print(f"\t  ⚠️  Could not identify exact problematic line")
+                        
+                except Exception:
+                    print(f"\t  ⚠️  Could not analyze kern file")
+                
+            else:
+                print(f"\t✗ ERROR in {filename_no_ext}. {error_type}: {error_message}")
+                
             
             # Track failed files
             failed_files.append(filepath)
@@ -154,7 +204,9 @@ def main():
             if not CONTINUE_ON_ERROR:
                 print(f"\nStopping processing due to error in file: {filepath}")
                 print(f"Error: {error_type}: {error_message}")
-                #print(f"\t  Traceback: {traceback.format_exc()}")
+                if not isinstance(e, IndexError):  # Don't duplicate IndexError details
+                    print("Full traceback:")
+                    traceback.print_exc()
                 print('\n')
                 raise e
             else:
@@ -178,18 +230,24 @@ def main():
         print(f"Success rate: {len(successful_files)/processed_count*100:.1f}%")
     print()
 
-    # Save successful files to log (append new ones to existing log)
+    # Save successful files to log (only write if file doesn't exist already)
     if successful_files:
         try:
-            # Create output directory if it doesn't exist
-            os.makedirs(os.path.dirname(successful_files_log), exist_ok=True)
-            
-            # Append new successful files to the log
-            with open(successful_files_log, 'a', encoding='utf-8') as f:
-                for filepath in successful_files:
-                    f.write(f"{filepath}\n")
-            
-            print(f"Added {len(successful_files)} successful files to log: {successful_files_log}")
+            # Only proceed if the log file doesn't already exist
+            if not os.path.exists(successful_files_log):
+                # Create output directory if it doesn't exist
+                os.makedirs(os.path.dirname(successful_files_log), exist_ok=True)
+                
+                # Write the new log file
+                with open(successful_files_log, 'w', encoding='utf-8') as f:
+                    for filepath in successful_files:
+                        f.write(f"{filepath}\n")
+                
+                print(f"Created new successful files log with {len(successful_files)} files: {successful_files_log}")
+            else:
+                print(f"Successful files log already exists, not overwriting: {successful_files_log}")
+                print(f"Would have added {len(successful_files)} files to the log")
+                
         except Exception as e:
             print(f"Warning: Could not save successful files log: {e}")
 
