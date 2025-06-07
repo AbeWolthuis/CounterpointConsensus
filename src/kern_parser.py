@@ -234,6 +234,15 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
                 elif line.startswith('*tb'):
                     # Tablature information - can be ignored for counterpoint analysis
                     continue
+                elif '*lig' in line or '*Xlig' in line:
+                    # Ligature notation - can be ignored for counterpoint analysis
+                    continue
+                elif '*col' in line:
+                    # Column information - can be ignored for counterpoint analysis
+                    continue
+                elif '*d:' in line or '*a:' in line or '*F:' in line:
+                    # Key designation like "*d:" or "*a:" - can be ignored for counterpoint analysis
+                    continue
                 else:
                     raise NotImplementedError(f"Some metadata starting with * not yet implemented. Line {line_idx}: {line}")            # --- Barline Handling ---
             elif line.startswith('='):
@@ -472,31 +481,66 @@ def kern_token_to_note(
         try:
             c = kern_token[i]
 
-            if c in DURATION_MAP:
+            # Check for anti-metric figure (look ahead for %)
+            # This handles both regular durations (like '2%9r') and triplet durations (like '3%2.B-')
+            if (c in DURATION_MAP or c in TRIPLET_DURATION_MAP) and i+1 < len(kern_token) and kern_token[i+1] == '%':
+                # Handle anti-metric figure like '2%9r', '4%3e', or '3%2.B-'
+                # Find the end of the multiplier (next non-digit character after %)
+                percent_pos = kern_token.find('%', i)
+                multiplier_start = percent_pos + 1
+                multiplier_end = multiplier_start
+                while multiplier_end < len(kern_token) and kern_token[multiplier_end].isdigit():
+                    multiplier_end += 1
+                
+                if multiplier_end == multiplier_start:
+                    raise ValueError(f"No multiplier found after '%' in token '{kern_token}'")
+                
+                # Extract the components
+                base_duration_char = c
+                multiplier = kern_token[multiplier_start:multiplier_end]
+                
+                # Calculate the duration based on which map the character belongs to
+                if base_duration_char in DURATION_MAP:
+                    base_duration = DURATION_MAP[base_duration_char]
+                else:
+                    # Must be in TRIPLET_DURATION_MAP
+                    base_duration = TRIPLET_DURATION_MAP[base_duration_char]
+                
+                new_note.duration = base_duration * int(multiplier)
+                new_note.is_measured_differently = True
+                
+                # Check what comes after the multiplier
+                if multiplier_end < len(kern_token):
+                    next_char = kern_token[multiplier_end]
+                    
+                    # Check for dots after the multiplier
+                    if next_char == '.':
+                        dot_count = count_dots_at_position(kern_token, multiplier_end)
+                        new_note.duration *= 1.5**dot_count
+                        i = multiplier_end + dot_count - 1  # Will be incremented by 1 at end of loop
+                    elif next_char == 'r':
+                        # Rest with anti-metric figure
+                        new_note.note_type = 'rest'
+                        i = multiplier_end  # Will be incremented by 1 at end of loop
+                    elif next_char in PITCH_TO_MIDI:
+                        # Note follows immediately after multiplier - let pitch parsing handle it
+                        i = multiplier_end - 1  # Will be incremented by 1, then pitch parsing will handle the note
+                    else:
+                        # Other characters - let them be handled by subsequent iterations
+                        i = multiplier_end - 1
+                else:
+                    # End of token after multiplier - we've parsed the entire anti-metric figure
+                    i = multiplier_end - 1
+                    
+            elif c in DURATION_MAP:
                 new_note.duration = DURATION_MAP[c]
             elif c in TRIPLET_DURATION_MAP:
-                # Detect triplet format. E.g. '3%2.B-' or '6e'
-                if i+2 < len(kern_token) and kern_token[i+1] == '%': # Detect a %, and splice 3%2 from the token
-                    triplet_duration_token = kern_token[i:i+3].split('%') 
-                    duration = TRIPLET_DURATION_MAP[triplet_duration_token[0]]
-                    duration_modifier = triplet_duration_token[1] 
-                    new_note.is_measured_differently = True
-                    new_note.duration = duration * int(duration_modifier)
-                    
-                    i += 2  # Skip the '%' and multiplier digit
-
-                    # Check for dots after the multiplier
-                    if i+1 < len(kern_token) and kern_token[i+1] == '.':
-                        dot_count = count_dots_at_position(kern_token, i+1)
-                        new_note.duration *= 1.5**dot_count
-                        i += dot_count
-
-                elif i+1 < len(kern_token) and kern_token[i+1] in PITCH_TO_MIDI:
+                # Handle triplet durations without % (like '6e', '3r', '3.F')
+                if i+1 < len(kern_token) and kern_token[i+1] in PITCH_TO_MIDI:
                     # Format like '6e' - triplet followed directly by pitch
                     new_note.duration = TRIPLET_DURATION_MAP[c]
                     new_note.is_measured_differently = True
                     # Don't increment i here - let pitch parsing handle the next character
-                    # Don't increment i here further - let pitch parsing handle the next character
                 elif i+1 < len(kern_token) and kern_token[i+1] == 'r':
                     # Format like '3r' - triplet rest
                     new_note.duration = TRIPLET_DURATION_MAP[c]
@@ -508,7 +552,6 @@ def kern_token_to_note(
                     new_note.duration = TRIPLET_DURATION_MAP[c]
                     new_note.is_measured_differently = True
                     # Count and apply dots, then skip over them
-
                     dot_count = count_dots_at_position(kern_token, i+1)
                     new_note.duration *= 1.5**dot_count
                     i += dot_count  # Skip all the dots we just processed
@@ -542,9 +585,18 @@ def kern_token_to_note(
                 # Handle editorial accidentals
                 editorial_len = 0
                 if include_editorial_accidentals:
-                    if (i + pitch_token_len + accidental_token_len < len(kern_token) and 
-                        kern_token[i + pitch_token_len + accidental_token_len] == 'i'):
-                        editorial_len = 1
+                    # Look for 'i' after the accidental, skipping over any ignored tokens
+                    search_pos = i + pitch_token_len + accidental_token_len
+                    while search_pos < len(kern_token):
+                        if kern_token[search_pos] == 'i':
+                            editorial_len = search_pos - (i + pitch_token_len + accidental_token_len) + 1
+                            break
+                        elif kern_token[search_pos] in ignored_tokens:
+                            # Skip ignored tokens like 'X', 'y', etc.
+                            search_pos += 1
+                        else:
+                            # Hit a non-ignored, non-'i' character - stop searching
+                            break
                 else:
                     raise NotImplementedError("Not using editorial accidentals is not yet implemented.")
 
@@ -648,7 +700,7 @@ def kern_token_to_note(
             else:
                 raise ValueError(f"Could not parse character '{c}' in token '{kern_token}', at index '{i}, bar {current_bar}.'")
         except Exception as e:
-            print(f"For token '{kern_token}', char '{c}', bar {current_bar} encountered error:\n\n")
+            print(f"For token '{kern_token}', char '{c}', bar {current_bar},  encountered error:\n")
             raise e
         
         i += 1
@@ -723,7 +775,7 @@ def parse_timesig(line: str, metadata: dict, bar_count: int) -> dict:
             if len(metadata['time_signatures']) == 0:
                 raise ValueError("Cannot copy previous time signature if there is no previous time signature.")
             else:
-                time_signatures[idx] = metadata['time_signatures'][-1][1]
+                time_signatures[idx] = metadata['time_signatures'][-1][1][idx]
             
     # Record the bar number of this change
     last_metadata_update_bar = bar_count

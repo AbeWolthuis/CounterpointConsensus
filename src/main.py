@@ -2,6 +2,7 @@ import os
 import cProfile
 import pandas as pd
 import traceback
+import linecache
 
 from pprint import pprint
 from IPython.display import display
@@ -21,7 +22,7 @@ from data_preparation import find_jrp_files
 def main():
     # --- Configurations ---
     CONTINUE_ON_ERROR = True  # Set to False to break on first error
-    BREAK_EARLY = True
+    BREAK_EARLY = False
     BREAK_COUNT = 120
     SKIP_SUCCESSFUL_FILES = True  # Flag to control skipping successfully processed files
     VERBOSE = True
@@ -44,13 +45,12 @@ def main():
     # filepaths = [os.path.join("..", "data", "test", "Jos1408-Miserimini_mei.krn"), os.path.join("..", "data", "test", "Rue1024a.krn"),os.path.join("..", "data", "test", "Oke1014-Credo_Village.krn")]
 
     # filepaths.extend([os.path.join("..", "data", "test", "Rue1024a.krn")]); filepaths = filepaths[::-1]  # Reverse the list to process in reverse order
-    filepaths = [os.path.join("..", "data", "test", "Rue1024a.krn"), 
-                #  "c:/Users/T460/Documents/Uni_spul/Jaar_7/Scriptie/CounterpointConsensus2/CounterpointConsensus/data/full/more_than_10/SELECTED/Bus/Bus1001e-Missa_Lhomme_arme-Agnus.krn"
-                #r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Bus\Bus2003-Anima_mea_liquefacta_est__Stirips_Jesse.krn',
-                r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Com\Com2002a-Hodie_nobis_cycle-Hodie_nobis.krn'
-                ]
+    # filepaths = [os.path.join("..", "data", "test", "Rue1024a.krn"), 
+    #             r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Bus\Bus2003-Anima_mea_liquefacta_est__Stirips_Jesse.krn',
+    #             r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Com\Com2002a-Hodie_nobis_cycle-Hodie_nobis.krn'
+    #             ]
 
-    # filepaths = find_jrp_files(DATASET_PATH, valid_files, invalid_files, anonymous_mode='skip')
+    filepaths = find_jrp_files(DATASET_PATH, valid_files, invalid_files, anonymous_mode='skip')
 
     # File tracking setup
     successful_files_log = os.path.join("..", "output", "successful_files.txt")
@@ -92,7 +92,6 @@ def main():
         # Skip if already successfully processed
         if SKIP_SUCCESSFUL_FILES and filepath.lower() in previously_successful:
             skipped_files.append(filepath)
-            #print(f"\t⏭ Skipping {filename_no_ext} (already processed)")
             continue
 
         try:
@@ -146,53 +145,70 @@ def main():
         except Exception as e:
             error_message = str(e)
             error_type = type(e).__name__
+            filename = os.path.basename(filepath)
+            filename_no_ext = filename.split('-')[0] if '-' in filename else filename.split('.')[0]
 
-
-            
-            # Enhanced error reporting for IndexError
-            if isinstance(e, IndexError) and VERBOSE:
-                filename = os.path.basename(filepath)
-                filename_no_ext = filename.split('-')[0] if '-' in filename else filename.split('.')[0]
-                
-                print(f"\t  📍 IndexError in {filename_no_ext}: {str(e)}")
-                
-                # Try to find the exact problematic kern file line
+            # Enhanced error reporting for specific error types
+            if VERBOSE and ((isinstance(e, ValueError) and "too many values to unpack" in str(e)) or isinstance(e, IndexError)):
+                # Common detailed error analysis
                 try:
                     with open(filepath, 'r', encoding='utf-8') as f:
                         kern_lines = [line.rstrip('\n') for line in f.readlines()]
                     
-                    # Look for 'original_line_idx' in traceback frames
+                    # Look for relevant variables in traceback frames
                     problematic_kern_line_num = None
+                    problematic_token = None
+                    problematic_code_line = None
                     tb_obj = e.__traceback__
                     
+                    # Find the innermost traceback frame and extract the problematic code line
+                    while tb_obj.tb_next:
+                        tb_obj = tb_obj.tb_next
+                    
+                    try:
+                        filename_from_tb = tb_obj.tb_frame.f_code.co_filename
+                        line_number_from_tb = tb_obj.tb_lineno
+                        problematic_code_line = linecache.getline(filename_from_tb, line_number_from_tb).strip()
+                    except:
+                        problematic_code_line = None
+                    
+                    # Look for relevant variables in all traceback frames
+                    tb_obj = e.__traceback__
                     while tb_obj:
                         local_vars = tb_obj.tb_frame.f_locals
+                        
                         if 'original_line_idx' in local_vars:
                             line_val = local_vars['original_line_idx']
                             if isinstance(line_val, int) and 0 <= line_val < len(kern_lines):
-                                problematic_kern_line_num = line_val + 1  # +1 for 1-based
-                                break
+                                problematic_kern_line_num = line_val + 1
+                        if 'token' in local_vars or 'kern_token' in local_vars:
+                            problematic_token = local_vars.get('token') or local_vars.get('kern_token')
+                        if 'line' in local_vars and isinstance(local_vars['line'], str):
+                            line_content = local_vars['line']
+                            for idx, kern_line in enumerate(kern_lines):
+                                if kern_line.strip() == line_content.strip():
+                                    problematic_kern_line_num = idx + 1
+                                    break
                         tb_obj = tb_obj.tb_next
                     
-                    # Show the problematic line with context
+
+                    # Compact output with emojis
+                    error_prefix = "📍 ValueError (unpack)" if isinstance(e, ValueError) else "📍 IndexError"
+                    print(f"\t{error_prefix} in {filename_no_ext}", end="")
+                    
                     if problematic_kern_line_num:
                         line_content = kern_lines[problematic_kern_line_num - 1]
-                        print(f"\t  🎯 Kern line {problematic_kern_line_num}: '{line_content}'")
-                        
-                        # Show minimal context (1 line before/after)
-                        start_ctx = max(1, problematic_kern_line_num - 1)
-                        end_ctx = min(len(kern_lines), problematic_kern_line_num + 1)
-                        
-                        for line_num in range(start_ctx, end_ctx + 1):
-                            line_text = kern_lines[line_num - 1]
-                            marker = ">>>" if line_num == problematic_kern_line_num else "   "
-                            print(f"\t    {marker} {line_num}: {line_text}")
+                        print(f" | 🎯 Line {problematic_kern_line_num}: '{line_content}'", end="")
+                        if problematic_token:
+                            print(f" | 🎯 Token: '{problematic_token}'", end="")
+                    
+                    if problematic_code_line:
+                        print(f" | 💥 Code: {problematic_code_line}")
                     else:
-                        print(f"\t  ⚠️  Could not identify exact problematic line")
+                        print()
                         
-                except Exception:
-                    print(f"\t  ⚠️  Could not analyze kern file")
-                
+                except Exception as debug_e:
+                    print(f"\t✗ {error_type} in {filename_no_ext}: {error_message}")
             else:
                 print(f"\t✗ ERROR in {filename_no_ext}. {error_type}: {error_message}")
                 
@@ -302,8 +318,6 @@ def main():
     print('\n')
     pd.set_option('display.max_columns', None)
     #display(full_violations_df); print()
-    'I am looking for an approach to show or print the DF with the violations in the terminal. This DF might be several columns wide. It would be desirable to print some of the first and some of the last rows. The approach should look nicer than just printing it out. Think about things like text size, or the terminal width. The monitor it will be shown on is not very large.'
-
 
 
     # --- Classify
