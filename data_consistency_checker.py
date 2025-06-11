@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Data Consistency Checker for Counterpoint Corpus (updated for critical vs informational distinction)
+Data Consistency Checker for Counterpoint Corpus (updated for critical vs informational distinction)
 
-This script validates the consistency of **kern files in the CounterpointConsensus
-dataset.  All functions run by `run_critical_checks()` now accept an optional
-`file_failures` argument so they can tag files that fail a critical test.  
+This script validates the consistency of **kern files in the CounterpointConsensus
+dataset.  All functions run by `run_critical_checks()` now accept an optional
+`file_failures` argument so they can tag files that fail a critical test.  
 Only files with **no** critical failures are passed on to the informational
 checks.
 """
@@ -20,10 +20,10 @@ ROOT_DIR   = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR   = os.path.join(ROOT_DIR, "data")
 
 DATASET_PATH = os.path.join(DATA_DIR, "full", "more_than_10", "SELECTED")
-TEST_DIR     = os.path.join(DATA_DIR, "test")           # fallback
+TEST_DIR     = os.path.join(DATA_DIR, "test")           # fallback
 
-COMPOSER_CODE_PATTERN = re.compile(r'^[A-Z]{3}$')       # three upper‑case letters
-FILE_PATTERN          = re.compile(r'.*\.krn$')         # *.krn files
+COMPOSER_CODE_PATTERN = re.compile(r'^[A-Z]{3}$')       # three upper‑case letters
+FILE_PATTERN          = re.compile(r'.*\.krn$')         # *.krn files
 
 DEBUG        = False
 MAX_EXAMPLES = 5
@@ -39,9 +39,9 @@ class ConsistencyChecker:
         self.placeholder_files:  List[str]        = []
         self.consistency_issues: Dict[str, List[str]] = defaultdict(list)
 
-        # tracking for the new critical/informational split
-        self.critical_failures: Dict[str, List[str]] = {}   # file → [reasons]
-        self.valid_files:      Set[str]            = set()  # files with 0 critical failures
+        # tracking for the new critical/informational split
+        self.critical_failures: Dict[str, List[str]] = {}   # file → [reasons]
+        self.valid_files:      Set[str]            = set()  # files with 0 critical failures
 
         # Initialize time signature related counts here
         self.time_signature_counts = defaultdict(int)
@@ -57,18 +57,18 @@ class ConsistencyChecker:
         composer_codes_upper: Set[str] = set()
 
         if DEBUG:
-            print(f"[DEBUG] Searching: {self.dataset_path} (exists={os.path.exists(self.dataset_path)})")
+            print(f"[DEBUG] Searching: {self.dataset_path} (exists={os.path.exists(self.dataset_path)})")
 
         if os.path.exists(self.dataset_path):
             for root, dirs, files in os.walk(self.dataset_path):
-                # pick up composer directories named “ABC”
+                # pick up composer directories named “ABC”
                 for d in dirs:
                     if COMPOSER_CODE_PATTERN.match(d):
                         composer_dirs.append(os.path.join(root, d))
                         self.composers.add(d)
                         composer_codes_upper.add(d.upper())
 
-                # extract composer code from lone *.krn files in otherwise flat dirs
+                # extract composer code from lone *.krn files in otherwise flat dirs
                 krn_files = [f for f in files if f.endswith(".krn")]
                 if krn_files:
                     composer_dirs.append(root)
@@ -79,14 +79,14 @@ class ConsistencyChecker:
                             self.composers.add(code)
                             composer_codes_upper.add(code)
 
-        # if none found, fall back to scanning every directory for krn files
+        # if none found, fall back to scanning every directory for krn files
         if not composer_dirs:
             for root, _, files in os.walk(self.dataset_path):
                 if any(f.endswith(".krn") for f in files):
                     composer_dirs.append(root)
 
         self.composer_codes_upper = composer_codes_upper
-        print(f"Found {len(composer_dirs)} directories with potential .krn files")
+        print(f"Found {len(composer_dirs)} directories with potential .krn files")
         return composer_dirs
 
     def collect_all_files(self, composer_dirs: List[str]) -> List[str]:
@@ -94,7 +94,7 @@ class ConsistencyChecker:
         self.all_files.clear()
 
         if not composer_dirs:
-            # no dedicated composer dirs – scan the entire dataset
+            # no dedicated composer dirs – scan the entire dataset
             for root, _, files in os.walk(self.dataset_path):
                 self.all_files += [os.path.join(root, f) for f in files if f.endswith(".krn")]
         else:
@@ -105,25 +105,25 @@ class ConsistencyChecker:
                 elif d.endswith(".krn"):
                     self.all_files.append(d)
 
-        print(f"Found {len(self.all_files)} .krn files")
+        print(f"Found {len(self.all_files)} .krn files")
         if DEBUG and self.all_files:
-            print(f"[DEBUG] Example files: {[os.path.basename(f) for f in self.all_files[:3]]}")
+            print(f"[DEBUG] Example files: {[os.path.basename(f) for f in self.all_files[:3]]}")
         return self.all_files
 
     # ──────────────────────────── critical checks ──────────────────────────────
-    # NOTE: every critical‑check method now accepts `file_failures` to note
+    # NOTE: every critical‑check method now accepts `file_failures` to note
     #       per‑file reasons for invalidation.  Add to it only for *critical*
     #       failures – informational findings are handled separately.
 
-    # ✓ already updated by the user
+    # ✓ already updated by the user
     def check_file_naming_convention(self, files: List[str], file_failures=None):
-        """Verify that filenames follow the ABC####.krn convention and map to a known composer."""
+        """Verify that filenames follow the ABC####.krn convention and map to a known composer."""
         for fp in files:
             fn = os.path.basename(fp)
             m = re.match(r'([A-Za-z]{3})(\d+[a-z]?).*\.krn', fn)
             if not m:
                 self.consistency_issues["file_naming"].append(
-                    f"File doesn't match naming pattern: {fn}"
+                    f"File doesn't match naming pattern: {fn}"
                 )
                 if file_failures is not None:
                     file_failures[fp].append("file_naming")
@@ -133,7 +133,7 @@ class ConsistencyChecker:
             if composer_code not in self.composers and \
                not any(c.upper() == composer_code for c in self.composers):
                 self.consistency_issues["file_naming"].append(
-                    f"File {fn} has composer code {composer_code} not recognised"
+                    f"File {fn} has composer code {composer_code} not recognised"
                 )
                 if file_failures is not None:
                     file_failures[fp].append("file_naming")
@@ -145,7 +145,7 @@ class ConsistencyChecker:
 
         for fp in files:
             fn = os.path.basename(fp)
-            # composer code from filename or path
+            # composer code from filename or path
             m = re.match(r'([A-Za-z]{3})\d+.*\.krn', fn)
             composer = m.group(1).upper() if m else next(
                 (part.upper() for part in os.path.normpath(fp).split(os.sep)
@@ -153,7 +153,7 @@ class ConsistencyChecker:
 
             if not composer:
                 self.consistency_issues["header_consistency"].append(
-                    f"Cannot determine composer code for {fp}"
+                    f"Cannot determine composer code for {fp}"
                 )
                 if file_failures is not None:
                     file_failures[fp].append("header_consistency")
@@ -165,7 +165,7 @@ class ConsistencyChecker:
                     for line in f:
                         if not line.startswith("!!!"):
                             break
-                        # case‑insensitive search for mandatory headers
+                        # case‑insensitive search for mandatory headers
                         for h in mandatory:
                             if line.lower().startswith(f"!!!{h.lower()}:"):
                                 present_headers.add(h)
@@ -176,13 +176,13 @@ class ConsistencyChecker:
                 missing = mandatory - present_headers
                 if missing:
                     self.consistency_issues["missing_headers"].append(
-                        f"File {fn} missing: {', '.join(sorted(missing))}"
+                        f"File {fn} missing: {', '.join(sorted(missing))}"
                     )
                     if file_failures is not None:
                         file_failures[fp].append("missing_headers")
 
             except Exception as e:
-                self.consistency_issues["file_reading"].append(f"Error reading {fn}: {e}")
+                self.consistency_issues["file_reading"].append(f"Error reading {fn}: {e}")
                 if file_failures is not None:
                     file_failures[fp].append("file_reading")
 
@@ -193,8 +193,8 @@ class ConsistencyChecker:
             for hdr, files_with_hdr in hmap.items():
                 if len(files_with_hdr) < total:
                     self.consistency_issues["header_consistency"].append(
-                        f"Composer {comp}: header {hdr} appears in "
-                        f"{len(files_with_hdr)}/{total} files"
+                        f"Composer {comp}: header {hdr} appears in "
+                        f"{len(files_with_hdr)}/{total} files"
                     )
                     # we cannot point to exact offending files easily; mark all lacking files
                     lacking = all_files - files_with_hdr
@@ -203,7 +203,7 @@ class ConsistencyChecker:
                             file_failures[lf].append("header_consistency")
 
     def check_time_signature_consistency(self, files: List[str], file_failures=None):
-        """Validate *M time‑signature tokens."""
+        """Validate *M time‑signature tokens."""
         ts_re_simple   = re.compile(r'^\d+/\d+$')      # e.g. 4/2
         ts_re_integer  = re.compile(r'^\d+$')          # single integer (mensural)
         ts_re_complex  = re.compile(r'^\d+/\d+%\d+$')  # e.g. 3/3%2
@@ -225,13 +225,13 @@ class ConsistencyChecker:
                                     )
                                     if not ok:
                                         self.consistency_issues["time_signature"].append(
-                                            f"Invalid time sig in {fn}: {token}"
+                                            f"Invalid time sig in {fn}: {token}"
                                         )
                                         if file_failures is not None:
                                             file_failures[fp].append("time_signature")
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {fn} for time‑signature check: {e}"
+                    f"Error reading {fn} for time‑signature check: {e}"
                 )
                 if file_failures is not None:
                     file_failures[fp].append("file_reading")
@@ -273,7 +273,7 @@ class ConsistencyChecker:
                     file_failures[fp].append("file_reading")
 
     def check_voice_indicator_format(self, files: List[str], file_failures=None):
-        """Check that !!!voices: is an integer (not e.g. 'three')."""
+        """Check that !!!voices: is an integer (not e.g. 'three')."""
         for fp in files:
             fn = os.path.basename(fp)
             try:
@@ -286,24 +286,24 @@ class ConsistencyChecker:
                             # Check if it's a simple integer
                             if not re.match(r'^\d+$', voice_value):
                                 self.consistency_issues["voice_format"].append(
-                                    f"Non‑integer voices in {fn} (line {ln}): {line.strip()}"
+                                    f"Non‑integer voices in {fn} (line {ln}): {line.strip()}"
                                 )
                                 if file_failures is not None:
                                     file_failures[fp].append("voice_format")
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {fn} for voice‑format check: {e}"
+                    f"Error reading {fn} for voice‑format check: {e}"
                 )
                 if file_failures is not None:
                     file_failures[fp].append("file_reading")
 
     def check_voice_indicator_lines(self, files: List[str], file_failures=None):
-        """Each of *Ivo, *I", *I' may appear at most once."""
+        """Each of *Ivo, *I", *I' may appear at most once."""
         for fp in files:
             fn = os.path.basename(fp)
             try:
                 with open(fp, encoding="utf-8") as f:
-                    occurrences = defaultdict(list)   # indicator → [(ln, text)]
+                    occurrences = defaultdict(list)   # indicator → [(ln, text)]
                     for ln, line in enumerate(f, 1):
                         if line.startswith("*Ivo"):
                             occurrences["*Ivo"].append((ln, line.strip()))
@@ -314,9 +314,9 @@ class ConsistencyChecker:
 
                 for ind, occ in occurrences.items():
                     if len(occ) > 1:
-                        detail = ", ".join([f"line {ln}" for ln, _ in occ[:MAX_EXAMPLES]])
+                        detail = ", ".join([f"line {ln}" for ln, _ in occ[:MAX_EXAMPLES]])
                         if len(occ) > MAX_EXAMPLES:
-                            detail += f", … (+{len(occ)-MAX_EXAMPLES})"
+                            detail += f", … (+{len(occ)-MAX_EXAMPLES})"
                         self.consistency_issues["voice_indicators"].append(
                             f"{fn}: {ind} appears {len(occ)}× ({detail})"
                         )
@@ -324,13 +324,13 @@ class ConsistencyChecker:
                             file_failures[fp].append("voice_indicators")
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {fn} for voice‑indicator check: {e}"
+                    f"Error reading {fn} for voice‑indicator check: {e}"
                 )
                 if file_failures is not None:
                     file_failures[fp].append("file_reading")
 
     def check_for_duplicate_voice_declarations(self, files: List[str], file_failures=None):
-        """Detect multiple !!!voices: lines."""
+        """Detect multiple !!!voices: lines."""
         for fp in files:
             fn = os.path.basename(fp)
             decl_lines: List[int] = []
@@ -341,13 +341,13 @@ class ConsistencyChecker:
                             decl_lines.append(ln)
                 if len(decl_lines) > 1:
                     self.consistency_issues["duplicate_voice_declarations"].append(
-                        f"{fn}: multiple !!!voices: ({', '.join(map(str, decl_lines))})"
+                        f"{fn}: multiple !!!voices: ({', '.join(map(str, decl_lines))})"
                     )
                     if file_failures is not None:
                         file_failures[fp].append("duplicate_voice_declarations")
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {fn} for duplicate‑voices check: {e}"
+                    f"Error reading {fn} for duplicate‑voices check: {e}"
                 )
                 if file_failures is not None:
                     file_failures[fp].append("file_reading")
@@ -375,11 +375,11 @@ class ConsistencyChecker:
                 if single:
                     if file_failures is not None:
                         file_failures[fp].append(
-                        f"{fn} is single‑voice (declared={declared}, actual={actual})"
+                        f"{fn} is single‑voice (declared={declared}, actual={actual})"
                         )
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {fn} for single‑voice check: {e}"
+                    f"Error reading {fn} for single‑voice check: {e}"
                 )
                 if file_failures is not None:
                     file_failures[fp].append("file_reading")
@@ -395,11 +395,11 @@ class ConsistencyChecker:
                     lines = [i for i, line in enumerate(f, 1) if '%' in line]
                 if lines:
                     self.consistency_issues["percent_signs"].append(
-                        f"{fn} contains % on lines: {lines[:MAX_EXAMPLES]}{' …' if len(lines) > MAX_EXAMPLES else ''}"
+                        f"{fn} contains % on lines: {lines[:MAX_EXAMPLES]}{' …' if len(lines) > MAX_EXAMPLES else ''}"
                     )
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {fn} for %‑sign check: {e}"
+                    f"Error reading {fn} for %‑sign check: {e}"
                 )
     
     def check_for_tuplet_markers(self, files: List[str]):
@@ -417,15 +417,15 @@ class ConsistencyChecker:
                             if toks:
                                 markers.append((ln, ", ".join(toks)))
                 if markers:
-                    first = "; ".join([f"line {ln}: {txt}" for ln, txt in markers[:MAX_EXAMPLES]])
+                    first = "; ".join([f"line {ln}: {txt}" for ln, txt in markers[:MAX_EXAMPLES]])
                     if len(markers) > MAX_EXAMPLES:
-                        first += f"; … (+{len(markers)-MAX_EXAMPLES})"
+                        first += f"; … (+{len(markers)-MAX_EXAMPLES})"
                     self.consistency_issues["tuplet_markers"].append(
-                        f"{fn}: tuplet markers found ({first})"
+                        f"{fn}: tuplet markers found ({first})"
                     )
             except Exception as e:
                 self.consistency_issues["file_reading"].append(
-                    f"Error reading {fn} for tuplet‑marker check: {e}"
+                    f"Error reading {fn} for tuplet‑marker check: {e}"
                 )
 
     def check_time_signature_indications(self, files: List[str]):
@@ -600,7 +600,7 @@ class ConsistencyChecker:
 
     # ───────────────────────── driver routines ────────────────────────────────
     def run_critical_checks(self, files: List[str]):
-        print(f"Running critical checks on {len(files)} files…")
+        print(f"Running critical checks on {len(files)} files…")
         self.critical_failures.clear()
         self.valid_files.clear()
 
@@ -609,7 +609,7 @@ class ConsistencyChecker:
         # Run placeholder check first as it's a fundamental validity issue
         files_after_placeholder_check = self.identify_placeholder_files(files, file_failures)
 
-        # Run other Critical checks only on files that are not placeholders
+        # Run other Critical checks only on files that are not placeholders
         self.check_file_naming_convention(files_after_placeholder_check, file_failures)
         self.check_file_header_consistency(files_after_placeholder_check, file_failures)
         self.check_time_signature_consistency(files_after_placeholder_check, file_failures)
@@ -620,7 +620,7 @@ class ConsistencyChecker:
         self.check_for_single_voice_files(files_after_placeholder_check, file_failures)
         
 
-        # classify all originally passed files
+        # classify all originally passed files
         for fp in files: # Iterate over the original list to capture placeholder failures too
             if fp in file_failures and file_failures[fp]:
                 self.critical_failures[fp] = list(set(file_failures[fp])) # Ensure unique reasons
@@ -631,7 +631,7 @@ class ConsistencyChecker:
         return self.valid_files, self.critical_failures
 
     def run_informational_checks(self, valid_files: List[str]):
-        print(f"Running informational checks on {len(valid_files)} files…")
+        print(f"Running informational checks on {len(valid_files)} files…")
         self.check_percent_sign_lines(valid_files)
         
         self.check_for_tuplet_markers(valid_files)
@@ -664,7 +664,7 @@ class ConsistencyChecker:
         if not self.consistency_issues and not self.critical_failures:
             self.run_all_checks()
 
-        print("\n=== CONSISTENCY CHECK REPORT ===\n")
+        print("\n=== CONSISTENCY CHECK REPORT ===\n")
 
         critical_categories = [
             "placeholder_files", "duplicate_voice_declarations", "voice_indicators",
@@ -680,40 +680,40 @@ class ConsistencyChecker:
         info_total = sum(len(self.consistency_issues[c]) for c in informational_categories)
 
         # Critical section
-        print("─── CRITICAL ISSUES ───")
+        print("─── CRITICAL ISSUES ───")
         for cat in critical_categories:
             issues = self.consistency_issues.get(cat, [])
             name   = cat.replace("_", " ").title()
             if issues:
-                print(f"\n{name} ({len(issues)})")
+                print(f"\n{name} ({len(issues)})")
                 for i in issues[:MAX_EXAMPLES]:
-                    print(f"  • {i}")
+                    print(f"  • {i}")
                 more = len(issues) - MAX_EXAMPLES
                 if more > 0:
-                    print(f"  … +{more} more")
+                    print(f"  … +{more} more")
             else:
-                print(f"{name}: 0 ✅")
+                print(f"{name}: 0 ✅")
 
         # Informational section
-        print("\n─── INFORMATIONAL NOTICES ───")
+        print("\n─── INFORMATIONAL NOTICES ───")
         for cat in informational_categories:
             issues = self.consistency_issues.get(cat, [])
             name   = cat.replace("_", " ").title()
             if issues:
-                print(f"\n{name} ({len(issues)})")
+                print(f"\n{name} ({len(issues)})")
                 for i in issues[:MAX_EXAMPLES]:
-                    print(f"  • {i}")
+                    print(f"  • {i}")
                 more = len(issues) - MAX_EXAMPLES
                 if more > 0:
-                    print(f"  … +{more} more")
+                    print(f"  … +{more} more")
             else:
-                print(f"{name}: 0 ✅")
+                print(f"{name}: 0 ✅")
 
         print("\n")
         self.report_time_signatures()
 
         # Summary
-        print("\n─── SUMMARY ───")
+        print("\n─── SUMMARY ───")
         print(f"Critical issues:        {crit_total}")
         print(f"Informational notices:  {info_total}")
         print(f"Total files checked:    {len(self.all_files)}")
@@ -818,7 +818,7 @@ class ConsistencyChecker:
                 clean_tokens.add(clean_token)
             print(f"[{', '.join(repr(token) for token in sorted(clean_tokens))}]")
     
-# ═════════════════════════════════ ═ CLI ═ ═══════════════════════════════════════
+# ═════════════════════════════════ ═ CLI ═ ═══════════════════════════════════════
 def main():
     # --- REMOVE argparse and CLI parsing ---
     # parser = argparse.ArgumentParser(description="Consistency checker for CounterpointConsensus")
@@ -835,9 +835,9 @@ def main():
         print(f"Using default dataset path {dataset_path}")
     else:
         dataset_path = TEST_DIR
-        print(f"Default path lacks .krn files – using {dataset_path}")
+        print(f"Default path lacks .krn files – using {dataset_path}")
 
-    print(f"\nChecking dataset at {dataset_path}\n")
+    print(f"\nChecking dataset at {dataset_path}\n")
     checker = ConsistencyChecker(dataset_path)
     issues, valid_files_set, critical_failures_dict = checker.run_all_checks()
     checker.generate_report()

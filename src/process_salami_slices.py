@@ -1,5 +1,5 @@
 from Note import Note, SalamiSlice
-from counterpoint_rules import CounterpointRules
+from counterpoint_rules import CounterpointRulesBase
 
 from constants import DURATION_MAP, INFINITY_BAR, REDUCED_INTERVAL_CONSONANCE_MAP
 from constants import FLOAT_TRUNCATION_DIGITS, BEAT_GRID_DIVISIONS
@@ -39,7 +39,7 @@ def post_process_salami_slices(salami_slices: list[SalamiSlice],
     
     return salami_slices, metadata
 
-def remove_barline_slice(salami_slices: list[SalamiSlice]) -> tuple[list[SalamiSlice], dict[str, any]]:
+def remove_barline_slice(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
     """ Remove all barline slices. """
     salami_slices = [salami_slice for salami_slice in salami_slices if salami_slice.notes[0].note_type not in ['barline', 'final_barline']]
     return salami_slices
@@ -76,11 +76,12 @@ def set_period_notes(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
                     # Rhythm properties
                     bar=salami_slice.bar,  # Use current slice's bar, not previous note's bar
                     duration=prev_note.duration, # TODO: should be set to the duration of the slice, not the previous note
+                    is_dotted=prev_note.is_dotted, 
 
                     # Tie properties
                     # These should explicitly not be copied, since the period can denote a tie-continuation or a tie-end.
 
-                    # Note quality
+                    # Note quality 
                     note_type=prev_note.note_type,
                     was_originally_period=True,  # THIS note was originally a period
                     is_new_occurrence=False,  # Explicitly not a new occurrence
@@ -263,7 +264,7 @@ def order_voices_by_name_legacy(salami_slices: list[SalamiSlice], metadata: dict
     """ Legacy voice ordering by name (kept as fallback). """
 
     # First, map the voice_names to their order
-    modern_names = [CounterpointRules.old_to_modern_voice_name_mapping[voice_name.strip().lower()] for voice_name in metadata['voice_names']]
+    modern_names = [CounterpointRulesBase.old_to_modern_voice_name_mapping[voice_name.strip().lower()] for voice_name in metadata['voice_names']]
 
     # Sort according to the order of the voice names
     order_of_voice_names = {
@@ -535,9 +536,9 @@ def link_salami_slices(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
     # --- Link backwards ---
     for idx, cur_slice in enumerate(salami_slices):
         for voice_idx, _ in enumerate(cur_slice.notes):
-            # Find the previous slice containing *any* note, the previous slice containing a *new occurrence* note,
+            # Find the previous slice containing *any* new occurrence note, the previous slice containing a *new occurrence* note,
             # and the previous slice containing a *rest* for this voice
-            prev_slice_with_any_new_occ = None       # Will store the slice with the *immediately* preceding new occurrence
+            prev_slice_with_any_new_occ = None       # Will store the slice with the preceding *rest* OR *note*
             prev_slice_with_note_new_occ = None      # Will store the slice with the preceding *new occurrence* note
             prev_slice_with_rest_new_occ = None      # Will store the slice with the preceding *rest*
 
@@ -571,7 +572,6 @@ def link_salami_slices(salami_slices: list[SalamiSlice]) -> list[SalamiSlice]:
 
             # Assign the found slices to the current slice's attributes
             cur_slice.previous_any_note_type_per_voice[voice_idx] = prev_slice_with_any_new_occ
-
             cur_slice.previous_note_per_voice[voice_idx] = prev_slice_with_note_new_occ
             cur_slice.previous_rest_per_voice[voice_idx] = prev_slice_with_rest_new_occ
 

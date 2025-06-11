@@ -62,13 +62,13 @@ class SalamiSlice(FloatTruncator):
         self.original_line_num: int = original_line_num
         
         # Link each voice to a previous/next slice
-        self.next_any_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
-        self.next_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
-        self.next_rest_per_voice: list[SalamiSlice|None] = [None] * num_voices
-                
-        self.previous_any_note_type_per_voice: list[SalamiSlice|None] = [None] * num_voices
-        self.previous_note_per_voice: list[SalamiSlice|None] = [None] * num_voices
-        self.previous_rest_per_voice: list[SalamiSlice|None] = [None] * num_voices
+        self.next_note_per_voice: list[SalamiSlice|None] = [None] * num_voices # Previous new occurrence note
+        self.next_rest_per_voice: list[SalamiSlice|None] = [None] * num_voices # Previous new occurrence rest
+        self.next_any_note_per_voice: list[SalamiSlice|None] = [None] * num_voices # Previous new occurrence, rest OR note 
+            
+        self.previous_note_per_voice: list[SalamiSlice|None] = [None] * num_voices # Previous new occurrence note
+        self.previous_rest_per_voice: list[SalamiSlice|None] = [None] * num_voices # Previous new occurrence rest
+        self.previous_any_note_type_per_voice: list[SalamiSlice|None] = [None] * num_voices # Previous new occurrence, rest OR note
 
     def __repr__(self):
         # Show both offset and beat in the representation
@@ -134,7 +134,6 @@ class SalamiSlice(FloatTruncator):
                     interval = abs(note1.midi_pitch - note2.midi_pitch) % 12
                     intervals[(i, j)] = interval
         return intervals
-    
     
     def _calculate_chord_analysis(self) -> Union[Dict[str, any], None]:
         """
@@ -267,8 +266,8 @@ class Note(FloatTruncator):
 
     __slots__ = (
         'midi_pitch',
-        'octave'
-        'spelled_name', # e.g. 
+        'octave',
+        'spelled_name',
         'duration',
         'bar',
         'is_tied',
@@ -288,6 +287,8 @@ class Note(FloatTruncator):
         'absolute_interval_to_root',
         'reduced_interval_to_root',
         'voice',
+        'is_dotted',  # Add this new property
+        'was_originally_period',
     )
 
     def __init__(self, 
@@ -310,12 +311,13 @@ class Note(FloatTruncator):
                 note_type: str|None = None,
                 was_originally_period: bool = False,  # True if this note was originally a period in the source file
                 is_new_occurrence: bool = True,               
-                is_measured_differently: bool = False,    
+                is_measured_differently: bool = False, # True if this is specified by a digit%digit token, or has a triplet duration
                 is_longa: bool = False,  
+                is_dotted: bool = False,  # Add this parameter
 
                 # Harmonic properties
                 is_consonance: bool|None = None, 
-                interval_to_root: int|None = None, # Interval to root in semitones
+                absolute_interval_to_root: int|None = None, # Interval to root in semitones
                 reduced_interval_to_root: int|None = None,
 
                 # Redundant, but for ease of processing
@@ -341,6 +343,7 @@ class Note(FloatTruncator):
         self.was_originally_period = was_originally_period
         self.is_measured_differently = is_measured_differently  
         self.is_longa = is_longa
+        self.is_dotted = is_dotted
         # Properties for ease of processing
         self.voice = voice
 
@@ -399,4 +402,3 @@ class Note(FloatTruncator):
 
         
         return
-    

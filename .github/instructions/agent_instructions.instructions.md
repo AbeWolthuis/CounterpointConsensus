@@ -6,6 +6,7 @@ applyTo: '**'
 - Coding Standards:
 Language: Python 3.12
 Documentation: Mandatory, docstrings and type-hinting for all modules and functions.
+Concise: Write only the neccessary code to achieve the instruction, do not be too verbose
 
 - Domain Knowledge:
 Music Theory: Focus on quantifiable rules of species counterpoint

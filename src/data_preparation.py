@@ -7,7 +7,9 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import numpy as np
 
-from counterpoint_rules import RuleViolation, CounterpointRules
+from counterpoint_rules import RuleViolation, CounterpointRulesBase
+
+DEBUG = True
 
 # Data preparation functions loading the JRP files
 def find_jrp_files(root_dir, valid_files=None, invalid_files=None, anonymous_mode='skip'):
@@ -23,29 +25,43 @@ def find_jrp_files(root_dir, valid_files=None, invalid_files=None, anonymous_mod
                 # Assumes the file name format is consistent with JRP IDs, e.g., "COM_01-12345-01.krn"
                 # Note, the composer-abbreviation is the first 3 characters of the filename.
                 original_fname = fname  # Preserve original filename
-                jrp_id = fname.split('-')[0]
+                filename_base = fname.split('-')[0]
                 
-                if valid_files is not None and jrp_id not in valid_files:
+                if valid_files is not None and filename_base not in valid_files:
                     continue
-                if invalid_files is not None and jrp_id in invalid_files:
+                if invalid_files is not None and filename_base in invalid_files:
                     continue
-                    
+
+                if filename_base.startswith('Jos'):
+                    certain_attribution = check_josquin_attribution_level(os.path.join(dirpath, original_fname))
+                    if not certain_attribution:
+                        if DEBUG: print(f"Skipping {original_fname} due to low attribution level.")
+                        continue
                 # Check for Ano files if ano_mode is 'skip' or 'prefix'
-                if jrp_id.startswith('Ano'):
+                elif filename_base.startswith('Ano'):
                     if anonymous_mode == 'skip':
                         continue
                     elif anonymous_mode == 'prefix':
                         # Get parent folder name (assume immediate parent is the composer code)
                         parent_folder = os.path.basename(os.path.dirname(dirpath))
-                        jrp_id = f"{parent_folder}_{jrp_id}"
+                        filename_base = f"{parent_folder}_{filename_base}"
                         # Don't modify fname - keep original filename for file system access
 
                 krn_files.append(os.path.join(dirpath, original_fname))  # Use original filename
     return krn_files
 
+def check_josquin_attribution_level(filepath: str) -> bool:
+        """Check if file has low attribution level (4a or 4b) and is by Jos."""
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.startswith('!!attribution-level@Jos:'):
+                    if line.startswith('!!attribution-level@Jos: 3') or line.startswith('!!attribution-level@Jos: 4a') or line.startswith('!!attribution-level@Jos: 4b'):
+                        return False
+
+        return True  # Include if we can't determine attribution or it's not 4a or 4b
 
 
-# Data preparation functions for counterpoint violations
+# --- Data preparation functions for counterpoint violations ---
 
 
 
@@ -64,7 +80,7 @@ def extract_rule_id_from_column(column_name: str) -> str:
 def sort_df_by_rule_id(df: pd.DataFrame) -> pd.DataFrame:
     """
     Sort DataFrame columns by rule ID. Columns without rule IDs are placed at the end.
-    Special handling for 'composer' column to keep it last.
+    Special handling for 'jrpid' and 'composer' columns to keep them first.
     """
     if df.empty:
         return df
@@ -72,11 +88,14 @@ def sort_df_by_rule_id(df: pd.DataFrame) -> pd.DataFrame:
     # Separate columns into categories
     rule_columns = []
     other_columns = []
+    jrpid_column = None
     composer_column = None
     
     for col in df.columns:
         if col.lower() == 'composer':
             composer_column = col
+        elif col.lower() == 'jrpid':
+            jrpid_column = col
         else:
             rule_id = extract_rule_id_from_column(col)
             if rule_id:
@@ -90,12 +109,20 @@ def sort_df_by_rule_id(df: pd.DataFrame) -> pd.DataFrame:
     # Sort other columns alphabetically
     other_columns.sort()
     
-    # Build final column order
-    sorted_columns = [col for col, _ in rule_columns] + other_columns
+    # Build final column order: jrpid first, composer second, then rule columns, then other columns
+    sorted_columns = []
     
-    # Add composer column at the end if it exists
+    # Add jrpid and composer first if they exist
+    if jrpid_column:
+        sorted_columns.append(jrpid_column)
     if composer_column:
         sorted_columns.append(composer_column)
+    
+    # Add rule columns sorted by rule_id
+    sorted_columns.extend([col for col, _ in rule_columns])
+    
+    # Add other columns
+    sorted_columns.extend(other_columns)
     
     # Return DataFrame with reordered columns
     return df[sorted_columns]
@@ -115,8 +142,23 @@ def get_rule_id_from_method(rule_name: str) -> str:
     Extract rule_id from the source code of a counterpoint rule method.
     """
     try:
-        # Get the method from CounterpointRules class
-        rule_method = getattr(CounterpointRules, rule_name)
+        # Try to get the method from multiple possible classes
+        rule_method = None
+        possible_classes = [CounterpointRulesBase]
+        
+        # Import the other classes
+        from counterpoint_rules_most import CounterpointRulesMost
+        from counterpoint_rules_normalization import CounterpointRulesNormalization
+        possible_classes.extend([CounterpointRulesMost, CounterpointRulesNormalization])
+        
+        # Try to find the method in any of the classes
+        for cls in possible_classes:
+            if hasattr(cls, rule_name):
+                rule_method = getattr(cls, rule_name)
+                break
+        
+        if rule_method is None:
+            return ""
         
         # Get the source code lines
         source_lines = inspect.getsource(rule_method).split('\n')
@@ -132,34 +174,46 @@ def get_rule_id_from_method(rule_name: str) -> str:
                 elif '"' in line:
                     rule_id = line.split('"')[1]
                     return rule_id
-        
-        # If rule_id not found, return empty string
-        return ""
     except:
-        # If any error occurs, return empty string
         return ""
-
 
 def violations_to_df(violations: dict[str, list[RuleViolation]], metadata) -> pd.DataFrame:
+    """
+    Convert violations dictionary to DataFrame with rule counts, composer, and JRP ID.
+    
+    Args:
+        violations: Dictionary mapping rule names to lists of RuleViolation objects
+        metadata: Metadata dictionary containing composer and JRP ID information
+        
+    Returns:
+        DataFrame with columns for each rule (with rule IDs), composer, and jrpid
+    """
     violation_counts = feature_counts(violations)
+    
     # Add the composer from metadata (defaulting to "Unknown" if not present)
     composer = metadata.get("COM", "Unknown")
-    # Add the composer to the violation_counts dictionary
     violation_counts["composer"] = composer
+    
+    # Add the JRP ID from metadata (defaulting to "Unknown" if not present)
+    jrpid = metadata.get("jrpid", "Unknown")
+    violation_counts["jrpid"] = jrpid
 
-    # Create df (with dict keys as columns), and set composer as last column
+    # Create df (with dict keys as columns)
     df = pd.DataFrame([violation_counts])
-    cols = [col for col in df.columns if col != "composer"] + ["composer"]
+    
+    # Reorder columns: composer first, jrpid second, rule columns last
+    rule_columns = [col for col in df.columns if col not in ["composer", "jrpid"]]
+    cols = ["composer", "jrpid"] + rule_columns 
     df = df[cols]
 
-    # Now rename ALL columns to include rule IDs by inspecting the method source
+    # Now rename ALL rule columns to include rule IDs by inspecting the method source
     column_name_map = {}
     for rule_name in violations.keys():
         rule_id = get_rule_id_from_method(rule_name)
         if rule_id:  # Only rename if we successfully extracted a rule_id
             column_name_map[rule_name] = f"{rule_name}, {rule_id}"
-    
-    # Apply the renaming but leave 'composer' unchanged
+
+    # Apply the renaming but leave 'composer' and 'jrpid' unchanged
     df = df.rename(columns=column_name_map)
     
     return df

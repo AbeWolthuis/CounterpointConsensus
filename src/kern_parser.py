@@ -28,7 +28,7 @@ import process_salami_slices
 # importlib.reload(process_salami_slices)
 
 from Note import Note, SalamiSlice
-from counterpoint_rules import CounterpointRules
+from counterpoint_rules import CounterpointRulesBase
 from process_salami_slices import post_process_salami_slices
 
 
@@ -304,20 +304,32 @@ def parse_kern(kern_filepath) -> Tuple[List, Dict]:
     # Handle composer attribution logic with priority
     if not metadata['COM'] and metadata['COA_entries']:
         # Find the highest priority COA entry
-        # Priority: COA > COA2 > COA3 > etc.
+        # Priority: COA > COA1 > COA2 > COA3 > etc.
         if 'COA' in metadata['COA_entries']:
             # COA without number has highest priority
             metadata['COM'] = metadata['COA_entries']['COA'] + " (COA)"
         else:
-            # Find the lowest numbered COA entry
+            # Find the lowest numbered COA entry (including COA1)
             coa_numbers = []
             for key in metadata['COA_entries'].keys():
-                if key.startswith('COA') and len(key) > 3:  # COA2, COA3, etc.
+                if key == 'COA1':
+                    # COA1 gets priority 1
+                    coa_numbers.append(1)
+                elif key.startswith('COA') and len(key) > 3:  # COA2, COA3, etc.
                     try:
                         num = int(key[3:])  # Extract number after "COA"
                         coa_numbers.append(num)
                     except ValueError:
                         continue
+        
+            if coa_numbers:
+                # Use the lowest numbered COA entry
+                min_num = min(coa_numbers)
+                if min_num == 1:
+                    coa_key = 'COA1'
+                else:
+                    coa_key = f'COA{min_num}'
+                metadata['COM'] = metadata['COA_entries'][coa_key] + f" ({coa_key})"
 
     ''' Parse the notes into salami slices. '''
     salami_slices = parse_note_section(note_section_with_indices, metadata)
@@ -517,7 +529,8 @@ def kern_token_to_note(
                     if next_char == '.':
                         dot_count = count_dots_at_position(kern_token, multiplier_end)
                         new_note.duration *= 1.5**dot_count
-                        i = multiplier_end + dot_count - 1  # Will be incremented by 1 at end of loop
+                        new_note.is_dotted = True  # Set dotted property
+                        i = multiplier_end + dot_count - 1
                     elif next_char == 'r':
                         # Rest with anti-metric figure
                         new_note.note_type = 'rest'
@@ -554,12 +567,11 @@ def kern_token_to_note(
                     # Count and apply dots, then skip over them
                     dot_count = count_dots_at_position(kern_token, i+1)
                     new_note.duration *= 1.5**dot_count
-                    i += dot_count  # Skip all the dots we just processed
-                    # Again, don't increment i here further - let pitch parsing handle the next character after the dot
+                    new_note.is_dotted = True  # Set dotted property for triplets
+                    i += dot_count
                 else:
                     raise ValueError(f"Could not parse triplet duration '{c}' in token '{kern_token}'")
-                ' #file:kern_parser.py #file:process_salami_slices.py #file:Note.py #file:constants.py am getting the following error. This is due to the fact that a period that indicates a lengthening of the triplet duration by a dotting is not handled right now. This is only properly done for periods after a regular (non-triplet) duration. How should the detection of tokens such as \'3.F\' be handled?'
-                'rework into approach that determines the pitch/amount of dots, e.g. seperate function that has same functionality as regular note parsing'
+                    
             elif c in PITCH_TO_MIDI:
                 ''' First, set the note without regarding accidentals. '''
                 pitch_token, pitch_token_len = parse_pitch_token(kern_token, i)
@@ -628,17 +640,9 @@ def kern_token_to_note(
                         raise ValueError(f"Could not find duration for token '{kern_token}' and dot-count '{dot_count}'")
         
                     new_note.duration *= 1.5**dot_count
-                    i += dot_count - 1  # Skip all dots (-1 because loop will increment by 1)
-                    
-                    if False:
-                        while i+dot_count < len(kern_token) and kern_token[i+dot_count] == '.':
-                            dot_count += 1
-                        # The duration should already be set. Thus, we can multiply it by 1.5 for each dot.
-                        if new_note.duration == -1:
-                            raise ValueError(f"Could not find duration for token '{kern_token}' and dot-count '{dot_count}'")
-                        new_note.duration *= 1.5**dot_count
-
-                        i += dot_count - 1
+                    new_note.is_dotted = True  # Set dotted property
+                    i += dot_count - 1
+            
             elif c == 'V':
                 # Tuplet start marker 
                 new_note.is_tuplet_start = True
@@ -918,7 +922,7 @@ def count_dots_at_position(kern_token: str, start_index: int) -> int:
     return dot_count
 
 
-def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRules,
+def validate_all_rules(salami_slices, metadata, cp_rules: CounterpointRulesBase,
                        only_validate_rules: list = None):
     violations = defaultdict(list[RuleViolation])
 
