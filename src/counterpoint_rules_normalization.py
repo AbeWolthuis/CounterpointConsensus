@@ -9,7 +9,7 @@ class CounterpointRulesNormalization(CounterpointRulesBase):
 
     """ %%% Normalization functions %%% """
     @staticmethod
-    def norm_count_tie_starts(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
+    def _norm_count_tie_starts(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
         """ Detect tie ends in the current slice. """
         rule_id = '_N1'
         
@@ -37,7 +37,7 @@ class CounterpointRulesNormalization(CounterpointRulesBase):
         return violations
 
     @staticmethod
-    def norm_count_tie_ends(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
+    def _norm_count_tie_ends(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
         """ Detect tie ends in the current slice. """
         rule_id = '_N2'
 
@@ -66,7 +66,7 @@ class CounterpointRulesNormalization(CounterpointRulesBase):
     
 
     @staticmethod
-    def norm_label_chord_name_m21(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
+    def _norm_label_chord_name_m21(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
         """ Labels m21 chord name """
         rule_id = '_N3'
         
@@ -111,7 +111,7 @@ class CounterpointRulesNormalization(CounterpointRulesBase):
 
 
     @staticmethod
-    def norm_ties_contained_in_bar(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
+    def _norm_ties_contained_in_bar(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
         """ Count ties that fall within a bar and do not cross a barline. """
         rule_id = '_N4'
         
@@ -164,7 +164,7 @@ class CounterpointRulesNormalization(CounterpointRulesBase):
         return violations
 
     @staticmethod
-    def norm_tie_end_not_new_occurrence(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
+    def _norm_tie_end_not_new_occurrence(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
         """ Count and label all new occurrence notes in the current slice. """
         rule_id = '_N5'
         
@@ -194,7 +194,7 @@ class CounterpointRulesNormalization(CounterpointRulesBase):
         return violations
 
     @staticmethod
-    def norm_count_dotted_notes(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
+    def _norm_count_dotted_notes(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
         """ Count and label all dotted notes (new occurrences) in the current slice for debugging purposes.
         This helps verify that the is_dotted property is being set correctly during parsing."""
         rule_id = '_N6'
@@ -229,11 +229,38 @@ class CounterpointRulesNormalization(CounterpointRulesBase):
 
         return violations
 
-    @staticmethod
-    def norm_section_and_piece_end():
-        return
+    
 
     # ---- Actual normalization functions ---
+    @staticmethod
+    def norm_note_count(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
+        """ Count all new occurrences of notes in the current slice. This normalizes rule 1 (note_count). """
+        rule_id = 'N00'
+        
+        salami_slices = kwargs['salami_slices']
+        metadata = kwargs['metadata']
+        curr_slice_idx = kwargs["slice_index"]
+        curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
+        violations = []
+
+        for voice_number, curr_note in enumerate(curr_slice.notes):
+            # Check if current note is a new occurrence
+            if curr_note and curr_note.note_type == 'note' and curr_note.is_new_occurrence:
+                violations.append(RuleViolation(
+                    rule_name=rulename,
+                    rule_id=rule_id,
+                    slice_index=curr_slice_idx,
+                    original_line_num=curr_slice.original_line_num,
+                    beat=curr_slice.beat,
+                    bar=curr_slice.bar,
+                    voice_indices=voice_number,
+                    voice_names=metadata['voice_names'][voice_number],
+                    note_names=curr_note.note_name
+                ))
+
+        return violations
+
+
     @staticmethod
     def norm_leap_count(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
         """Count all leaps (> 2 semitones) between consecutive notes. This normalizes rule 22 (leap_too_large) by counting total leap opportunities."""
@@ -286,7 +313,79 @@ class CounterpointRulesNormalization(CounterpointRulesBase):
         return violations
 
     @staticmethod
-    def norm_two_leaps_in_a_row(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
+    def norm_approached_followed_leap(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
+        """
+        Count all leaps that are approached and followed by a note (without section crossings or rests).
+        This normalizes rule 23 (leap_approach_left_opposite) by counting total leap opportunities
+        that could potentially violate the directional rule.
+        """
+        rule_id = 'N23'
+        
+        salami_slices = kwargs['salami_slices']
+        metadata = kwargs['metadata']
+        curr_slice_idx = kwargs["slice_index"]
+        curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
+        violations = []
+
+        for voice_number, curr_note in enumerate(curr_slice.notes):
+            # Gather all slices that contain the notes that need to be checked
+            next_slice = curr_slice.next_note_per_voice[voice_number]
+            prev_slice = curr_slice.previous_note_per_voice[voice_number]
+            prev_prev_slice = None if prev_slice is None else prev_slice.previous_note_per_voice[voice_number]
+            
+            if (curr_note.note_type == 'note') and (curr_note.is_new_occurrence) and (prev_slice is not None) \
+                and (prev_prev_slice is not None) and (next_slice is not None):
+
+                # Gather all notes that need to be checked in the rule
+                next_note = next_slice.notes[voice_number]
+                prev_note = prev_slice.notes[voice_number]
+                prev_prev_note = prev_prev_slice.notes[voice_number]
+
+                # Gather all the slices of the rests that could potentially be in between any of the notes
+                next_rest_slice = curr_slice.next_rest_per_voice[voice_number]
+                prev_rest_slice = curr_slice.previous_rest_per_voice[voice_number]
+                prev_prev_rest_slice = None if prev_rest_slice is None else prev_rest_slice.previous_rest_per_voice[voice_number]
+
+                if (prev_note is not None) and (next_note is not None) and (prev_prev_note is not None):
+                    section_crossed = \
+                        (curr_slice.bar in metadata['section_starts'] and prev_slice.bar in metadata['section_ends']) or \
+                        (prev_slice.bar in metadata['section_starts'] and prev_prev_slice.bar in metadata['section_ends']) or \
+                        (next_slice.bar in metadata['section_starts'] and curr_slice.bar in metadata['section_ends'])
+                    
+                    # Check if there is a rest in between any of the relevant notes
+                    rest_between_curr_next = next_rest_slice and next_rest_slice.original_line_num < next_slice.original_line_num
+                    rest_between_curr_prev = prev_rest_slice and prev_rest_slice.original_line_num > prev_slice.original_line_num
+                    rest_between_curr_prev_prev = prev_prev_rest_slice and ((prev_rest_slice.original_line_num > prev_prev_slice.original_line_num)\
+                                                                            or (prev_prev_rest_slice.original_line_num > prev_prev_slice.original_line_num) )
+                    
+                    if section_crossed:
+                        continue
+                    elif rest_between_curr_next or rest_between_curr_prev or rest_between_curr_prev_prev:
+                        continue
+                    else:
+                        # Check if the main interval is a leap (> 2 semitones)
+                        interval_leap = abs(curr_note.midi_pitch - prev_note.midi_pitch)
+                        
+                        # Count ALL leaps that are approached and followed by notes
+                        # (regardless of direction - that's what rule 23 checks)
+                        if interval_leap > 2:
+                            violations.append(RuleViolation(
+                                rule_name=rulename,
+                                rule_id=rule_id,
+                                slice_index=curr_slice_idx,
+                                original_line_num=curr_slice.original_line_num,
+                                beat=curr_slice.beat,
+                                bar=curr_slice.bar,
+                                voice_indices=voice_number,
+                                voice_names=metadata['voice_names'][voice_number],
+                                # Chronological order (earliest to latest)
+                                note_names=(prev_prev_note.note_name, prev_note.note_name, curr_note.note_name, next_note.note_name)
+                            ))
+                            
+        return violations
+
+    @staticmethod
+    def norm_successive_leap_count(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
         """
         Count all occurrences of two leaps in a row.
         This normalizes the interval_order_motion (25) rule by counting total possibilities.
@@ -300,61 +399,54 @@ class CounterpointRulesNormalization(CounterpointRulesBase):
         violations = []
 
         for voice_number, curr_note in enumerate(curr_slice.notes):
-            # Short-circuit evaluation prevents NoneType errors
-            if (curr_note.note_type == 'note' and 
-                (prev_1st_slice := curr_slice.previous_any_note_type_per_voice[voice_number]) is not None and
-                (prev_2nd_slice := prev_1st_slice.previous_note_per_voice[voice_number]) is not None and
-                (prev_1st_note := prev_1st_slice.notes[voice_number]) is not None and
-                (prev_2nd_note := prev_2nd_slice.notes[voice_number]) is not None and
-                prev_1st_note.note_type == 'note' and 
-                prev_2nd_note.note_type == 'note'):
+            if not (curr_note.note_type == 'note' and curr_note.is_new_occurrence):
+                continue
 
-                # Get rest slices for each voice position
-                rest_after_2nd = prev_2nd_slice.next_rest_per_voice[voice_number]
-                rest_after_1st = prev_1st_slice.next_rest_per_voice[voice_number]
-                
-                # Check if there's a rest between prev_2nd_note and prev_1st_note
-                rest_between_2nd_1st = (rest_after_2nd and 
-                                       rest_after_2nd.original_line_num < prev_1st_slice.original_line_num)
-                
-                # Check if there's a rest between prev_1st_note and curr_note
-                rest_between_1st_curr = (rest_after_1st and 
-                                       rest_after_1st.original_line_num < curr_slice.original_line_num)
-                
-                # Skip if there are rests interrupting the note sequence
-                if rest_between_2nd_1st or rest_between_1st_curr:
-                    continue
-                    
-                # Check if we cross a section between either of the slices
-                if CounterpointRulesBase._chronological_slices_cross_section([prev_2nd_slice, prev_1st_slice, curr_slice], metadata):
-                    continue
-                if (curr_slice.bar in metadata['section_starts'] and prev_1st_slice.bar in metadata['section_ends']) or \
-                    (prev_1st_slice.bar in metadata['section_starts'] and prev_2nd_slice.bar in metadata['section_ends']):
-                    continue
-                
-                # Calculate intervals between consecutive notes
-                interval1 = abs(curr_note.midi_pitch - prev_1st_note.midi_pitch)
-                interval2 = abs(prev_1st_note.midi_pitch - prev_2nd_note.midi_pitch)
-                
-                # Count ALL cases where we have two consecutive leaps (> 2 semitones each)
-                if (interval1 > 2) and (interval2 > 2):
-                    # This is a case of two leaps in a row - count it regardless of interval order
-                    violations.append(RuleViolation(
-                        rule_name=rulename,
-                        rule_id=rule_id,
-                        slice_index=curr_slice_idx,
-                        original_line_num=curr_slice.original_line_num,
-                        beat=curr_slice.beat,
-                        bar=curr_slice.bar,
-                        voice_indices=voice_number,
-                        voice_names=metadata['voice_names'][voice_number],
-                        note_names=(prev_2nd_note.note_name, prev_1st_note.note_name, curr_note.note_name)
-                    ))
+            # Get two previous note slices (both must be actual notes) - same as rule 25
+            prev_1st_slice = curr_slice.previous_note_per_voice[voice_number]
+            if prev_1st_slice is None:
+                continue
+            
+            prev_2nd_slice = prev_1st_slice.previous_note_per_voice[voice_number]
+            if prev_2nd_slice is None:
+                continue
+
+            prev_1st_note = prev_1st_slice.notes[voice_number]
+            prev_2nd_note = prev_2nd_slice.notes[voice_number]
+            
+            if (prev_1st_note.note_type != 'note' or prev_2nd_note.note_type != 'note'):
+                continue
+
+            # Check for section crossings or rests - same as rule 25
+            if CounterpointRulesBase._chronological_slices_cross_section(
+                [prev_2nd_slice, prev_1st_slice, curr_slice], metadata):
+                continue
+
+            # Calculate intervals between consecutive notes
+            later_leap = abs(curr_note.midi_pitch - prev_1st_note.midi_pitch)     # More recent leap
+            earlier_leap = abs(prev_1st_note.midi_pitch - prev_2nd_note.midi_pitch)  # Earlier leap
+            
+            # Count ALL cases where we have two consecutive leaps (> 2 semitones each)
+            if later_leap > 2 and earlier_leap > 2:
+                # This is a case of two leaps in a row - count it regardless of direction or interval order
+                violations.append(RuleViolation(
+                    rule_name=rulename,
+                    rule_id=rule_id,
+                    slice_index=curr_slice_idx,
+                    original_line_num=curr_slice.original_line_num,
+                    beat=curr_slice.beat,
+                    bar=curr_slice.bar,
+                    voice_indices=voice_number,
+                    voice_names=metadata['voice_names'][voice_number],
+                    note_names=(prev_2nd_note.note_name, prev_1st_note.note_name, curr_note.note_name)
+                ))
 
         return violations
 
+
+
     @staticmethod
-    def norm_strong_beat_count(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
+    def norm_approached_strong_beat_count(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
         """
         Count all new occurrences of notes on strong beats that are approached directly by a previous note.
         This means there should not be a section break or rest before the current note.
@@ -416,6 +508,46 @@ class CounterpointRulesNormalization(CounterpointRulesBase):
 
         return violations
 
+
+    @staticmethod
+    def norm_voice_pair_count(rulename, **kwargs) -> list[RuleViolation]:
+        """
+        Count total voice pairs in the piece. This is constant per piece.
+        For n voices: voice_pairs = n * (n-1) / 2
+        Only creates one "violation" per piece (at first slice).
+        """
+        rule_id = 'N41'
+        
+        curr_slice_idx = kwargs["slice_index"]
+        
+        # Only calculate once per piece (at first slice)
+        if curr_slice_idx != 0:
+            return []
+        
+        metadata = kwargs['metadata']
+        voice_names = metadata['voice_names']
+        n_voices = len(voice_names)
+        
+        # Calculate voice pairs: C(n,2) = n*(n-1)/2
+        voice_pair_count = (n_voices * (n_voices - 1)) // 2
+        
+        # Create one violation per voice pair to get the correct total count
+        violations = []
+        for i in range(voice_pair_count):
+            violations.append(RuleViolation(
+                rule_name=rulename,
+                rule_id=rule_id,
+                slice_index=curr_slice_idx,
+                original_line_num=1,  # First line
+                beat=0.0,
+                bar=1,
+                voice_indices=0,  # Dummy voice
+                voice_names=voice_names[0],  # First voice name
+                note_names=f"voice_pairs_{n_voices}_voices"
+            ))
+        
+        return violations
+    
 
 
 

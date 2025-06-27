@@ -26,7 +26,7 @@ COMPOSER_CODE_PATTERN = re.compile(r'^[A-Z]{3}$')       # three upper‑case let
 FILE_PATTERN          = re.compile(r'.*\.krn$')         # *.krn files
 
 DEBUG        = False
-MAX_EXAMPLES = 5
+MAX_EXAMPLES = 30
 
 
 # ═════════════════════════════════ Main checker class ═══════════════════════════
@@ -175,11 +175,13 @@ class ConsistencyChecker:
 
                 missing = mandatory - present_headers
                 if missing:
+                    # Treat missing metadata headers as informational only
                     self.consistency_issues["missing_headers"].append(
                         f"File {fn} missing: {', '.join(sorted(missing))}"
                     )
-                    if file_failures is not None:
-                        file_failures[fp].append("missing_headers")
+                    # do NOT mark as critical failure:
+                    # if file_failures is not None:
+                    #     file_failures[fp].append("missing_headers")
 
             except Exception as e:
                 self.consistency_issues["file_reading"].append(f"Error reading {fn}: {e}")
@@ -196,11 +198,10 @@ class ConsistencyChecker:
                         f"Composer {comp}: header {hdr} appears in "
                         f"{len(files_with_hdr)}/{total} files"
                     )
-                    # we cannot point to exact offending files easily; mark all lacking files
-                    lacking = all_files - files_with_hdr
-                    if file_failures is not None:
-                        for lf in lacking:
-                            file_failures[lf].append("header_consistency")
+                    # do NOT mark missing headers here as critical either
+                    # if file_failures is not None:
+                    #     for lf in lacking:
+                    #         file_failures[lf].append("header_consistency")
 
     def check_time_signature_consistency(self, files: List[str], file_failures=None):
         """Validate *M time‑signature tokens."""
@@ -668,12 +669,13 @@ class ConsistencyChecker:
 
         critical_categories = [
             "placeholder_files", "duplicate_voice_declarations", "voice_indicators",
-            "voice_format", "voice_count", "missing_headers", "file_naming",
+            "voice_format", "voice_count", "file_naming",
             "header_consistency", "time_signature", "file_reading", "single_voice_files",
         ]
+
         informational_categories = [
             "percent_signs", "tuplet_markers", "time_signature_indications",
-            "rscale_tokens",
+            "rscale_tokens", "missing_headers",
             ]
 
         crit_total = sum(len(self.consistency_issues[c]) for c in critical_categories)

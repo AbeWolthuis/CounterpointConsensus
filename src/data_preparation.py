@@ -7,9 +7,11 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import numpy as np
 
-from counterpoint_rules import RuleViolation, CounterpointRulesBase
 
-DEBUG = True
+
+from counterpoint_rules_base import RuleViolation, CounterpointRulesBase
+
+DEBUG = False
 
 # Data preparation functions loading the JRP files
 def find_jrp_files(root_dir, valid_files=None, invalid_files=None, anonymous_mode='skip'):
@@ -148,8 +150,10 @@ def get_rule_id_from_method(rule_name: str) -> str:
         
         # Import the other classes
         from counterpoint_rules_most import CounterpointRulesMost
+        from counterpoint_rules_motion import CounterpointRulesMotion
         from counterpoint_rules_normalization import CounterpointRulesNormalization
-        possible_classes.extend([CounterpointRulesMost, CounterpointRulesNormalization])
+        
+        possible_classes.extend([CounterpointRulesMost, CounterpointRulesMotion, CounterpointRulesNormalization])
         
         # Try to find the method in any of the classes
         for cls in possible_classes:

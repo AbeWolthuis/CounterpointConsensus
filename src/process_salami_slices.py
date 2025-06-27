@@ -1,5 +1,5 @@
 from Note import Note, SalamiSlice
-from counterpoint_rules import CounterpointRulesBase
+from counterpoint_rules_base import CounterpointRulesBase
 
 from constants import DURATION_MAP, INFINITY_BAR, REDUCED_INTERVAL_CONSONANCE_MAP
 from constants import FLOAT_TRUNCATION_DIGITS, BEAT_GRID_DIVISIONS

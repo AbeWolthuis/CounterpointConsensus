@@ -4,9 +4,9 @@ applyTo: '**'
 - Project Goal: Parse symbolic music files in kern format, analyse their counterpoint, use the counterpoint features to perform composer attribution.
 
 - Coding Standards:
+Code style: Write concise, short code to achieve the goal. Don't be verbose.
 Language: Python 3.12
-Documentation: Mandatory, docstrings and type-hinting for all modules and functions.
-Concise: Write only the neccessary code to achieve the instruction, do not be too verbose
+Documentation: Mandatory, docstrings and type-hinting are needed. Use comments.
 
 - Domain Knowledge:
 Music Theory: Focus on quantifiable rules of species counterpoint
@@ -14,7 +14,7 @@ Stylometry: Understand techniques for identifying authorship through statistical
 Music Information Retrieval (MIR): Be proficient in parsing music files (kern format, humdrum) into salami slice representation.
 Machine Learning: Apply classification algorithms (SVM, boosting) to classify composers based on the extracted contrapuntal features.
 
-- Key Context:
+- Context:
 Data-Driven: The core of the project is extracting meaningful data; prioritize robust and accurate feature extraction logic.
 
 - How to run a Python file from the terminal in VS Code:

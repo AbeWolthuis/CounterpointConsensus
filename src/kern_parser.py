@@ -28,7 +28,7 @@ import process_salami_slices
 # importlib.reload(process_salami_slices)
 
 from Note import Note, SalamiSlice
-from counterpoint_rules import CounterpointRulesBase
+from counterpoint_rules_base import CounterpointRulesBase
 from process_salami_slices import post_process_salami_slices
 
 

@@ -6,27 +6,30 @@ from counterpoint_rules import RuleViolation
 
 
 def annotate_all_kern(destination_dir: str, all_metadata: dict[str, dict], all_violations: dict[str, list[RuleViolation]],
-                        use_rule_ids: bool = True, overwrite: bool = True, maintain_jrp_structure: bool = True, verbose: bool = False,) -> None:
+                        overwrite: bool = True, maintain_jrp_structure: bool = True, 
+                        save_as_txt: bool = False, include_invisible_comments: bool = True, verbose: bool = False) -> None:
     """Annotate all kern files in the given list of file paths.
 
     Args:
-        kern_filepaths (list[str]): List of file paths to kern files.
         destination_dir (str): Directory to save the annotated files.
         all_metadata (dict[str, dict]): Metadata for each piece.
         all_violations (dict[str, list[RuleViolation]]): Rule violations for each piece.
+        use_rule_ids (bool, optional): If True, use rule IDs in annotations. Defaults to True.
+        overwrite (bool, optional): If True, overwrite existing annotated files. Defaults to True.
         maintain_jrp_structure (bool, optional): If True, maintain JRP directory structure. Defaults to True.
+        save_as_txt (bool, optional): If True, save as .txt instead of .krn. Defaults to False.
+        include_invisible_comments (bool, optional): If True, include invisible comments with rule names. Defaults to True.
         verbose (bool, optional): If True, print additional information. Defaults to False.
-        overwrite (bool, optional): If True, overwrite existing annotated files. Defaults to False.
     """
     for jrpid, metadata in all_metadata.items():
-        # if verbose: print(f"Annotating {jrpid}...")
-        
-        # Annotate the violations in a copy of the kern file
         src_path = metadata["src_path"]
-
-        # Decide the annotated filename
         base_krn = os.path.basename(src_path)
-        annotated_filename = f"annotated__{base_krn}"
+        
+        # Choose file extension based on flag
+        if save_as_txt:
+            annotated_filename = f"annotated__{base_krn.replace('.krn', '.txt')}"
+        else:
+            annotated_filename = f"annotated__{base_krn}"
         
         # If maintain_jrp_structure is True, create the directory for the current composer, if not yet present
         if maintain_jrp_structure:
@@ -40,16 +43,17 @@ def annotate_all_kern(destination_dir: str, all_metadata: dict[str, dict], all_v
         # Get the rule violations for this piece
         violations = all_violations[jrpid]
 
-        # Annotate a copy of the .krn source with comments for each violation
+        # Annotate a copy of the .krn source with comments for each violation   
         annotate_kern(src_path, dst_path, violations, metadata, 
-                      use_rule_ids=use_rule_ids, overwrite=overwrite, verbose=verbose)
+                      overwrite=overwrite, 
+                      include_invisible_comments=include_invisible_comments, verbose=verbose)
 
         if verbose:
             print(f"Annotated {jrpid} and saved to {dst_path}")
 
 
 def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict, 
-                  use_rule_ids: bool, overwrite: bool, verbose: bool) -> None:
+                  overwrite: bool, include_invisible_comments: bool, verbose: bool) -> None:
     """
     Inserts comment lines above each line in the .krn file that has a violation.
     Each violation includes the line index ("original_line_num"), voice(s),
@@ -78,8 +82,17 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
     # This will look like: {line_num: {voice_index: [RuleViolation, RuleViolation, ...]}}
     violations_to_line_voice_map = defaultdict(lambda: defaultdict(list))
 
-    # Populate violations_to_line_voice_map
-    for rule_name, rule_violations in violations.items():
+    # Populate violations_to_line_voice_map (filter out normalization functions)
+    for rule_function_name, rule_violations in violations.items():
+        # Skip empty rule violations
+        if not rule_violations:
+            continue
+
+        # Skip normalization functions (rules where last part after ',' starts with 'N' followed by digit)
+        rule_id = rule_violations[0].rule_id  # All violations for this rule should have the same rule_id
+        if rule_id[0] == 'N' and rule_id[1:].isdigit():
+            continue
+            
         for v in rule_violations:
             line_num = v.original_line_num
 
@@ -166,9 +179,10 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
                 visible_comment_line = "\t".join(visible_comment_tokens) + "\n"
                 fout.write(visible_comment_line)
                 
-                # Write the invisible comment line (rule names with note names)
-                invisible_comment_line = "\t".join(invisible_comment_tokens) + "\n"
-                fout.write(invisible_comment_line)
+                # Write the invisible comment line only if enabled
+                if include_invisible_comments:
+                    invisible_comment_line = "\t".join(invisible_comment_tokens) + "\n"
+                    fout.write(invisible_comment_line)
 
                 # Write the original line
                 fout.write(line)
@@ -196,4 +210,3 @@ def annotate_kern(src_path: str, dst_path: str, violations: dict, metadata: dict
 if __name__ == "__main__":
     # Example usage
     pass
-    

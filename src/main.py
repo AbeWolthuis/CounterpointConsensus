@@ -12,7 +12,9 @@ from tqdm import tqdm
 from kern_parser import parse_kern, validate_all_rules
 from process_salami_slices import post_process_salami_slices
 
-from counterpoint_rules import CounterpointRules, RuleViolation
+from counterpoint_rules import CounterpointRules, CounterpointRuleError
+from counterpoint_rules_base import RuleViolation
+
 from data_preparation import violations_to_df, sort_df_by_rule_id
 from data_preparation import find_jrp_files
 from annotate_kern import annotate_all_kern
@@ -23,7 +25,7 @@ def main():
     # --- Configurations ---
     CONTINUE_ON_ERROR = True  # Set to False to break on first error
     BREAK_EARLY = True
-    BREAK_COUNT = 50
+    BREAK_COUNT = 450
     SKIP_SUCCESSFUL_FILES = False  # Flag to control skipping successfully processed files
     VERBOSE = True
 
@@ -46,11 +48,11 @@ def main():
 
     # filepaths.extend([os.path.join("..", "data", "test", "Rue1024a.krn")]); filepaths = filepaths[::-1]  # Reverse the list to process in reverse order
     filepaths = [os.path.join("..", "data", "test", "Rue1024a.krn"), 
-                r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Bus\Bus2003-Anima_mea_liquefacta_est__Stirips_Jesse.krn',
-                r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Com\Com2002a-Hodie_nobis_cycle-Hodie_nobis.krn'
+                r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Bus\Bus1001a-Missa_Lhomme_arme-Kyrie.krn',
+                #r'c:\Users\T460\Documents\Uni_spul\Jaar_7\Scriptie\CounterpointConsensus2\CounterpointConsensus\data\full\more_than_10\SELECTED\Com\Com2002a-Hodie_nobis_cycle-Hodie_nobis.krn'
                 ]
 
-    # filepaths = find_jrp_files(DATASET_PATH, valid_files, invalid_files, anonymous_mode='skip')
+    filepaths = find_jrp_files(DATASET_PATH, valid_files, invalid_files, anonymous_mode='skip')
 
 
     # File tracking setup
@@ -110,48 +112,76 @@ def main():
                 salami_slices, metadata = parse_kern(filepath)
                 salami_slices, metadata = post_process_salami_slices(salami_slices, metadata, expand_metadata_flag=True)
 
-                cp_rules = CounterpointRules()
-                only_validate_rules = [
-                    # Rhytm
-                    #'brevis_at_begin_end', 'longa_only_at_endings', 
-                    # Dots and ties
-                    #    'tie_into_strong_beat', 'tie_into_weak_beat',
-                    # Melody
-                       'leap_too_large',  'leap_approach_left_opposite', 'interval_order_motion', 'successive_leap_opposite_direction', 'leap_up_accented_long_note',
-                    # Other aspects
-                        # 'ascending_leap_strong_quarter', 'leading_tone_approach_step', 'eight_pair_stepwise',
-                    # Quarter note idioms
-                        # 'ascending_leap_to_from_quarter', 'leap_in_quarters_balanced',
+                try:
+                    cp_rules = CounterpointRules()
+                    only_validate_rules = [
+                        # Rhytm
+                        #'brevis_at_begin_end', 'longa_only_at_endings', 
+                        # Dots and ties
+                            # 'tie_into_strong_beat',    
+                            # 'tie_into_weak_beat',
+
+                        ## Melody
+                        # 'leap_too_large',  
+                        'leap_approach_left_opposite', 'leap_up_accented_long_note', #'interval_order_motion', 'successive_leap_opposite_direction', 
+                        # Other aspects
+                            # 'ascending_leap_strong_quarter', 'eight_pair_stepwise', 'leading_tone_approach_step',
+                        # Quarter note idioms
+                            # 'ascending_leap_to_from_quarter', 'leap_in_quarters_balanced',
+
+                        ## Technical details
+                        # Motion relationships
+                            # 'contrary_motion', 
+                            # 'oblique_motion',
+                            'similar_motion',
+                            # 'parallel_motion', 
+                            # 'parallel_fifth_octave'
+                        
+                        # Chords
+                            # 'non_root_1st_inv_maj', 
+
+                        # Normalization functions
+                            # 'norm_count_dotted_notes', 'norm_ties_contained_in_bar',
+                            # 'norm_count_tie_starts', 'norm_count_tie_ends', 'norm_tie_end_not_new_occurrence'
+                            # 'norm_leap_count', 'norm_successive_leap_count', 'norm_approached_strong_beat_count',
+                    ]
+
+                    violations = validate_all_rules(salami_slices, metadata, cp_rules, only_validate_rules)
+                    curr_df = violations_to_df(violations, metadata)
+                    if full_violations_df.empty:
+                        full_violations_df = curr_df
+                    else:
+                        full_violations_df = pd.concat([full_violations_df, curr_df], ignore_index=True)
+
+                except CounterpointRuleError as cp_rule_error:
+                    # Enhanced error reporting with rule context
+                    tqdm.write(f"\t\t🎵 RULE ERROR in {filename_no_ext}")
+                    tqdm.write(f"\t\t   ├─ Rule: {cp_rule_error.rule_name}")
+                    if cp_rule_error.rule_class_name:
+                        tqdm.write(f"\t\t   ├─ Class: {cp_rule_error.rule_class_name}")
+                    tqdm.write(f"\t\t   ├─ Error Type: {type(cp_rule_error.original_error).__name__}")
+                    tqdm.write(f"\t\t   └─ Message: {str(cp_rule_error.original_error)}")
                     
-                    # Chords
-                        # 'non_root_1st_inv_maj', 
-
-                    # Normalization functions
-                        # 'norm_count_dotted_notes', 'norm_ties_contained_in_bar',
-                        # 'norm_count_tie_starts', 'norm_count_tie_ends', 'norm_tie_end_not_new_occurrence'
-                ]
-
-                violations = validate_all_rules(salami_slices, metadata, cp_rules, only_validate_rules)
-                curr_df = violations_to_df(violations, metadata)
-                if full_violations_df.empty:
-                    full_violations_df = curr_df
-                else:
-                    full_violations_df = pd.concat([full_violations_df, curr_df], ignore_index=True)
-
-                    # Success message (this will appear above the progress bar)
-                    tqdm.write(f"\t✓ JRP-ID: {metadata['jrpid']}")
+                    failed_files.append(filepath)
                     
-                    # Store the violations in a dict, with its JRP ID as the key.
-                    # In order to annotate the violations in each piece later, we save metadata with the violations for each piece.
-                    # In order to do so, remove the very large (and now unndeeded) key-sig info # TODO: also remove time-sigs
-                    curr_jrpid = metadata['jrpid']
-                    del metadata['key_signatures']
+                    if not CONTINUE_ON_ERROR:
+                        raise cp_rule_error
+                    else:
+                        pbar.update(1)
+                        continue
 
-                    all_metadata[curr_jrpid] = metadata
-                    all_violations[curr_jrpid] = violations
-                    successful_files.append(filepath)
+                tqdm.write(f"\t✓ JRP-ID: {metadata['jrpid']}")
+                
+                # Store the violations and metadata...
+                curr_jrpid = metadata['jrpid']
+                del metadata['key_signatures']
+
+                all_metadata[curr_jrpid] = metadata
+                all_violations[curr_jrpid] = violations
+                successful_files.append(filepath)
 
             except Exception as e:
+                # This is a parsing error - existing error handling
                 error_message = str(e)
                 error_type = type(e).__name__
                 filename = os.path.basename(filepath)
@@ -296,18 +326,21 @@ def main():
     if annotate_violations_flag:
         destination_dir = os.path.join("..", "output", "annotated")
         annotate_all_kern(destination_dir, all_metadata, all_violations, 
-                          use_rule_ids=True, overwrite=True, maintain_jrp_structure=True,
-                          verbose=False)
+                        overwrite=True, maintain_jrp_structure=True,
+                        save_as_txt=True, include_invisible_comments=False, verbose=False)
         # Report on how many files were annotated
         count = len(all_metadata)
-        print(f"Annotated {count} file{'s' if count!=1 else ''} and saved to: {destination_dir}")
+        file_ext = "txt" if True else "krn"  # Update this boolean to match save_as_txt
+        print(f"Annotated {count} files as .{file_ext} and saved to: {destination_dir}")
 
 
     # Sort the final DF
     full_violations_df = sort_df_by_rule_id(full_violations_df)
 
     # Normalize the DF
-    full_violations_df = normalize_dataframe(full_violations_df)
+    full_violations_df = normalize_dataframe(full_violations_df, normalize_everything_by_notecount=True)
+
+
 
     # Save DataFrame to CSV file
     if not BREAK_EARLY:
@@ -326,11 +359,10 @@ def main():
     print('\n')
     pd.set_option('display.max_columns', None)
     display(composer_averages)
-    #display(full_violations_df); print()
+    # display(full_violations_df); print()
 
 
     # --- Classify ---
-
 
     # --- Analyze classification ---
 

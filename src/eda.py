@@ -6,7 +6,7 @@ import numpy as np # Import numpy for linspace
 import seaborn as sns # Import seaborn
 
 
-from src.data_preparation import find_jrp_files
+from data_preparation import find_jrp_files
 
 
 def count_slices(filepath):
@@ -129,8 +129,10 @@ def plot_slice_distribution(df):
         palette=composer_colors,
         order=composer_order
     )
-    axs[0, 0].set_title('Number of Pieces per Composer')
+    axs[0, 0].set_title('Number of Pieces')
     axs[0, 0].tick_params(axis='x', rotation=45)
+    axs[0, 0].set_xlabel(None)
+    axs[0, 0].set_ylabel(None)
 
     # --- Bar Graph - Mean Slice Count (Top-Right) ---
     mean_slices = (
@@ -145,8 +147,10 @@ def plot_slice_distribution(df):
         palette=composer_colors,
         order=composer_order
     )
-    axs[0, 1].set_title('Mean Slice Count per Composer')
+    axs[0, 1].set_title('Mean Slice Count')
     axs[0, 1].tick_params(axis='x', rotation=45)
+    axs[0, 1].set_xlabel(None)
+    axs[0, 1].set_ylabel(None)
 
     # --- Heatmap - Voice Count Distribution (Bottom-Left) ---
     # Remove 1-voice bin and remap all pieces with more than 6 voices to a "6+" bin
@@ -169,18 +173,16 @@ def plot_slice_distribution(df):
     # Compute column‐wise percentages
     voice_composer_pct = voice_composer_counts.div(voice_composer_counts.sum(axis=0), axis=1) * 100
 
-    # Prepare annotation matrix: show “xx.x%”. Note: not used right now, but used in the future.
+    # Prepare annotation matrix: show "xx.x%". Note: not used right now, but used in the future.
     annot_matrix_pct = voice_composer_pct.round(1).astype(str) + '%'
     # Blank out zero‐percent cells
     annot_matrix_pct[voice_composer_pct == 0] = ""
 
-    # Use a linear viridis palette
-    cmap = plt.get_cmap("viridis")
-
+    # Use Greens colormap (matching the MI heatmap style)
     hm = sns.heatmap(
         voice_composer_pct,
         ax=axs[1, 0],
-        cmap=cmap,
+        cmap='Blues',        # ← try rocket reversed
         annot=False,
         fmt="s",
         cbar_kws={'label': 'Percent of Pieces'},
@@ -188,7 +190,7 @@ def plot_slice_distribution(df):
         vmax=100
     )
 
-    axs[1, 0].set_title('Voice Count Distribution per Composer (%)')
+    axs[1, 0].set_title('Voice Counts')
     axs[1, 0].set_xlabel(None)
     axs[1, 0].set_ylabel(None)
     axs[1, 0].tick_params(axis='x', rotation=45)
@@ -202,7 +204,7 @@ def plot_slice_distribution(df):
     # --- Violin Plot - Slice Count (Bottom-Right) ---
     # Plot ordered alphabetically, but colored by frequency map
     sns.violinplot(ax=axs[1, 1], x='composer', y='slice_count', data=df, palette=composer_colors, inner='quartile', order=composer_order) # Use original df
-    axs[1, 1].set_title('Distribution of Slice Counts per Composer') # Updated title
+    axs[1, 1].set_title('Distribution of Slice Counts') # Updated title
     axs[1, 1].set_xlabel(None) # Remove x-label
     axs[1, 1].set_ylabel(None) # Remove y-label explicitly
     axs[1, 1].tick_params(axis='x', rotation=45)
@@ -216,13 +218,14 @@ def plot_slice_distribution(df):
 
 if __name__ == '__main__':
 
-    ROOT_DIR   = os.path.dirname(os.path.abspath(__file__))
+    ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     DATA_DIR   = os.path.join(ROOT_DIR, "data")
     DATASET_PATH = os.path.join(DATA_DIR, "full", "more_than_10", "SELECTED")
 
     valid_files = None
-    invalid_files = ['Bus3064', 'Bus3078', 'Com1002a', 'Com1002b', 'Com1002c', 'Com1002d', 'Com1002e', 'Duf2027a', 'Duf3015', 'Duf3080', 'Gas0204c', 'Gas0503', 'Gas0504', 'Jos0302e', 'Jos0303c', 'Jos0303e', 'Jos0304c', 'Jos0402d', 'Jos0402e', 'Jos0602e', 'Jos0603d', 'Jos0901e', 'Jos0902a', 'Jos0902b', 'Jos0902c', 'Jos0902d', 'Jos0902e', 'Jos0904a', 'Jos0904b', 'Jos0904d', 'Jos0904e', 'Jos1302', 'Jos1501', 'Jos1610', 'Jos1706', 'Jos1802', 'Jos2015', 'Jos2102', 'Jos2602', 'Jos3004', 'Jos9901a', 'Jos9901e', 'Jos9905', 'Jos9906', 'Jos9907a', 'Jos9907b', 'Jos9908', 'Jos9909', 'Jos9910', 'Jos9911', 'Jos9912', 'Jos9914', 'Jos9923', 'Mar1003c', 'Mar3040', 'Oke1003a', 'Oke1003b', 'Oke1003c', 'Oke1003d', 'Oke1003e', 'Oke1005a', 'Oke1005b', 'Oke1005c', 'Oke1005d', 'Oke1005e', 'Oke1010a', 'Oke1010b', 'Oke1010c', 'Oke1010d', 'Oke1010e', 'Oke1011d', 
-'Oke3025', 'Ort2005', 'Rue1007a', 'Rue1007b', 'Rue1007c', 'Rue1007d', 'Rue1007e', 'Rue1029a', 'Rue1029b', 'Rue1029c', 'Rue1029d', 'Rue1029e', 'Rue1035a', 'Rue1035b', 'Rue1035c', 'Rue1035d', 'Rue1035e', 'Rue2028', 'Rue2030', 'Rue2032', 'Rue3004', 'Rue3013', 'Tin3002']
+    invalid_files = ['Bus3064', 'Bus3078', 'Com1002a', 'Com1002b', 'Com1002c', 'Com1002d', 'Com1002e', 'Duf2027a', 'Gas0204c', 'Gas0503', 'Gas0504', 'Jos0302e', 'Jos0303c', 'Jos0303e', 'Jos0304c', 'Jos0402d', 'Jos0402e', 'Jos0602e', 'Jos0603a', 'Jos0603d', 'Jos0901e', 'Jos0902a', 'Jos0902b', 'Jos0902c', 'Jos0902d', 'Jos0902e', 'Jos0904a', 'Jos0904b', 'Jos0904d', 'Jos0904e', 'Jos1302', 'Jos1501', 'Jos1610', 'Jos1706', 'Jos1802', 'Jos2015', 'Jos2102', 'Jos2602', 'Jos3004', 'Jos9905', 'Jos9906', 'Jos9907a', 'Jos9907b', 'Jos9908', 'Jos9909', 'Jos9910', 'Jos9911', 'Jos9912', 'Jos9914', 'Mar1003c', 'Mar3040', 'Oke1011d', 'Oke1013e', 'Ort2005', 'Rue1007a', 'Rue1007b', 'Rue1007c', 'Rue1007d', 'Rue1007e', 'Rue1029a', 'Rue1029b', 'Rue1029c', 'Rue1029d', 'Rue1029e', 'Rue1035a', 'Rue1035b', 'Rue1035c', 'Rue1035d', 'Rue1035e', 'Rue2028', 'Rue2030', 'Rue2032', 'Rue3004', 'Rue3013', 'Tin3002']
+    #    # old: invalid_files = ['Bus3064', 'Bus3078', 'Com1002a', 'Com1002b', 'Com1002c', 'Com1002d', 'Com1002e', 'Duf2027a', 'Duf3015', 'Duf3080', 'Gas0204c', 'Gas0503', 'Gas0504', 'Jos0302e', 'Jos0303c', 'Jos0303e', 'Jos0304c', 'Jos0402d', 'Jos0402e', 'Jos0602e', 'Jos0603d', 'Jos0901e', 'Jos0902a', 'Jos0902b', 'Jos0902c', 'Jos0902d', 'Jos0902e', 'Jos0904a', 'Jos0904b', 'Jos0904d', 'Jos0904e', 'Jos1302', 'Jos1501', 'Jos1610', 'Jos1706', 'Jos1802', 'Jos2015', 'Jos2102', 'Jos2602', 'Jos3004', 'Jos9901a', 'Jos9901e', 'Jos9905', 'Jos9906', 'Jos9907a', 'Jos9907b', 'Jos9908', 'Jos9909', 'Jos9910', 'Jos9911', 'Jos9912', 'Jos9914', 'Jos9923', 'Mar1003c', 'Mar3040', 'Oke1003a', 'Oke1003b', 'Oke1003c', 'Oke1003d', 'Oke1003e', 'Oke1005a', 'Oke1005b', 'Oke1005c', 'Oke1005d', 'Oke1005e', 'Oke1010a', 'Oke1010b', 'Oke1010c', 'Oke1010d', 'Oke1010e', 'Oke1011d', 
+    # 'Oke3025', 'Ort2005', 'Rue1007a', 'Rue1007b', 'Rue1007c', 'Rue1007d', 'Rue1007e', 'Rue1029a', 'Rue1029b', 'Rue1029c', 'Rue1029d', 'Rue1029e', 'Rue1035a', 'Rue1035b', 'Rue1035c', 'Rue1035d', 'Rue1035e', 'Rue2028', 'Rue2030', 'Rue2032', 'Rue3004', 'Rue3013', 'Tin3002']
     manual_invalid_files = ['Jos0603a',]
     invalid_files.extend(manual_invalid_files)
 

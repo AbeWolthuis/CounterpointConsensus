@@ -1,7 +1,9 @@
 
-# from counterpoint_rules import CounterpointRulesBase, RuleViolation
 from counterpoint_rules_base import CounterpointRulesBase, RuleViolation
 from Note import SalamiSlice
+
+from music21 import pitch as m21_pitch
+from music21 import interval as m21_interval
 
 from constants import DURATION_MAP, TIME_SIGNATURE_STRONG_BEAT_MAP
 
@@ -114,7 +116,7 @@ class CounterpointRulesMost(CounterpointRulesBase):
         """
         Check if the current note is a tie-end and falls on a strong beat.
         """
-        rule_id = '14a'
+        rule_id = '14'
         salami_slices = kwargs['salami_slices']
         metadata = kwargs['metadata']
         curr_slice_idx = kwargs["slice_index"]
@@ -154,7 +156,7 @@ class CounterpointRulesMost(CounterpointRulesBase):
         """
         Check if the current note is a tie-end and falls on a strong beat.
         """
-        rule_id = '14b'
+        rule_id = '15'
         salami_slices = kwargs['salami_slices']
         metadata = kwargs['metadata']
         curr_slice_idx = kwargs["slice_index"]
@@ -402,69 +404,78 @@ class CounterpointRulesMost(CounterpointRulesBase):
     @staticmethod
     def interval_order_motion(rulename, **kwargs) -> dict[str, list[RuleViolation]]:
         """
-        In leaps: in ascending motion, the larger intervals come first; in descending, the smaller first.  
+        In two consecutive leaps in the same direction: 
+        - Ascending motion: larger interval comes first 
+        - Descending motion: smaller interval comes first
         """
         rule_id = '25'
-
+        
         salami_slices = kwargs['salami_slices']
         metadata = kwargs['metadata']
         curr_slice_idx = kwargs['slice_index']
         curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
-
         violations = []
 
         for voice_number, curr_note in enumerate(curr_slice.notes):
-            # Short-circuit evaluation prevents NoneType errors
-            if (curr_note.note_type == 'note' and curr_note.is_new_occurrence and
-                (prev_1st_slice := curr_slice.previous_any_note_type_per_voice[voice_number]) is not None and
-                (prev_2nd_slice := prev_1st_slice.previous_note_per_voice[voice_number]) is not None and
-                (prev_1st_note := prev_1st_slice.notes[voice_number]) is not None and  # If the slice exists, the note should never be none. This check is only donefor the short-circuit walrus assignment syntax.
-                (prev_2nd_note := prev_2nd_slice.notes[voice_number]) is not None and
-                prev_1st_note.note_type == 'note' and 
-                prev_2nd_note.note_type == 'note'):
+            if not (curr_note.note_type == 'note' and curr_note.is_new_occurrence):
+                continue
 
-                # Get rest slices for each voice position
-                rest_after_2nd = prev_2nd_slice.next_rest_per_voice[voice_number]
-                rest_after_1st = prev_1st_slice.next_rest_per_voice[voice_number]
-                
-                # Check if there's a rest between prev_2nd_note and prev_1st_note
-                rest_between_2nd_1st = (rest_after_2nd and 
-                                    rest_after_2nd.original_line_num < prev_1st_slice.original_line_num)
-                
-                # Check if there's a rest between prev_1st_note and curr_note
-                rest_between_1st_curr = (rest_after_1st and 
-                                    rest_after_1st.original_line_num < curr_slice.original_line_num)
-                
-                # Skip if there are rests interrupting the note sequence
-                if rest_between_2nd_1st or rest_between_1st_curr:
-                    continue
-                # Check if we cross a section between either of the slices
-                if CounterpointRulesBase._chronological_slices_cross_section([prev_2nd_slice, prev_1st_slice, curr_slice], metadata):
-                    continue
-                if (curr_slice.bar in metadata['section_starts'] and prev_1st_slice.bar in metadata['section_ends']) or \
-                    (prev_1st_slice.bar in metadata['section_starts'] and prev_2nd_slice.bar in metadata['section_ends']):
-                    continue
-                
-                # If we didnt cross a section, check the leap.
-                interval1 = abs(curr_note.midi_pitch - prev_1st_note.midi_pitch)
-                interval2 = abs(prev_1st_note.midi_pitch - prev_2nd_note.midi_pitch)
-                
-                # Check if the interval is a leap.
-                if (interval1 > 2) and (interval2 > 2):
-                    # If the motion is ascending, first interval in time (interval2) should be bigger or equal to interval1. Violation if this is not so.
-                    if ( (curr_note.midi_pitch > prev_1st_note.midi_pitch > prev_2nd_note.midi_pitch) and not (interval2 >= interval1)) or \
-                    ( (curr_note.midi_pitch < prev_1st_note.midi_pitch < prev_2nd_note.midi_pitch) and not (interval2 <= interval1)):
-                        violations.append(RuleViolation(
-                            rule_name=rulename,
-                            rule_id=rule_id,
-                            slice_index=curr_slice_idx,
-                            original_line_num=curr_slice.original_line_num,
-                            beat=curr_slice.beat,
-                            bar=curr_slice.bar,
-                            voice_indices=voice_number,
-                            voice_names=metadata['voice_names'][voice_number],
-                            note_names=(prev_2nd_note.note_name, prev_1st_note.note_name, curr_note.note_name)
-                        ))
+            # Get two previous note slices (both must be actual notes)
+            prev_1st_slice = curr_slice.previous_note_per_voice[voice_number]
+            if prev_1st_slice is None:
+                continue
+            
+            prev_2nd_slice = prev_1st_slice.previous_note_per_voice[voice_number]
+            if prev_2nd_slice is None:
+                continue
+
+            prev_1st_note = prev_1st_slice.notes[voice_number]
+            prev_2nd_note = prev_2nd_slice.notes[voice_number]
+            
+            if (prev_1st_note.note_type != 'note' or prev_2nd_note.note_type != 'note'):
+                continue
+
+            # Check for section crossings or rests
+            if CounterpointRulesBase._chronological_slices_cross_section(
+                [prev_2nd_slice, prev_1st_slice, curr_slice], metadata):
+                continue
+
+            # Calculate intervals (rename for clarity)
+            later_leap = abs(curr_note.midi_pitch - prev_1st_note.midi_pitch)     # More recent leap
+            earlier_leap = abs(prev_1st_note.midi_pitch - prev_2nd_note.midi_pitch)  # Earlier leap
+
+            # Both must be leaps
+            if later_leap <= 2 or earlier_leap <= 2:
+                continue
+
+            # Check if motion is in same direction
+            ascending = (prev_2nd_note.midi_pitch < prev_1st_note.midi_pitch < curr_note.midi_pitch)
+            descending = (prev_2nd_note.midi_pitch > prev_1st_note.midi_pitch > curr_note.midi_pitch)
+            
+            if not (ascending or descending):
+                continue  # Not same direction
+
+            # Apply the rule:
+            # Ascending: earlier leap should be >= later leap
+            # Descending: earlier leap should be <= later leap  
+            violation = False
+            if ascending and earlier_leap < later_leap:
+                violation = True
+            elif descending and earlier_leap > later_leap:
+                violation = True
+
+            if violation:
+                violations.append(RuleViolation(
+                    rule_name=rulename,
+                    rule_id=rule_id,
+                    slice_index=curr_slice_idx,
+                    original_line_num=curr_slice.original_line_num,
+                    beat=curr_slice.beat,
+                    bar=curr_slice.bar,
+                    voice_indices=voice_number,
+                    voice_names=metadata['voice_names'][voice_number],
+                    note_names=(prev_2nd_note.note_name, prev_1st_note.note_name, curr_note.note_name)
+                ))
 
         return violations
     
@@ -880,7 +891,6 @@ class CounterpointRulesMost(CounterpointRulesBase):
         curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
         violations = []
 
-        raise NotImplementedError
         # TODO: read through this/test it
 
         for voice_number, curr_note in enumerate(curr_slice.notes):
@@ -1123,69 +1133,7 @@ class CounterpointRulesMost(CounterpointRulesBase):
         return violations
     
 
-    """ %% Technical details %%   """
+    
 
-    """ % Motion relationships %   """
-    @staticmethod
-    def contrary_motion(rulename, **kwargs) -> list[RuleViolation]:
-        """
-        Count contrary motion.
-        Contrary: there is movement between the voices move in the opposite direction. So, if two voices move up and down, movement is contrary (regardless of what other voices do).
-        """
-        rule_id = '41a'
-        
-        salami_slices = kwargs['salami_slices']
-        metadata = kwargs['metadata']
-        curr_slice_idx = kwargs["slice_index"]
-        curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
-        violations = []
-
-
-        return violations
-
-    @staticmethod
-    def oblique_motion(rulename, **kwargs) -> list[RuleViolation]:
-        """
-        Count oblique motion.
-        """
-        rule_id = '41b'
-        
-        salami_slices = kwargs['salami_slices']
-        metadata = kwargs['metadata']
-        curr_slice_idx = kwargs["slice_index"]
-        curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
-        violations = []
-
-        return violations
-
-    @staticmethod
-    def parallel_motion(rulename, **kwargs) -> list[RuleViolation]:
-        """
-        Count parallel motion.
-        """
-        rule_id = '41c'
-        
-        salami_slices = kwargs['salami_slices']
-        metadata = kwargs['metadata']
-        curr_slice_idx = kwargs["slice_index"]
-        curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
-        violations = []
-
-        return violations
-
-    @staticmethod
-    def similar_motion(rulename, **kwargs) -> list[RuleViolation]:
-        """
-        Count similar motion.
-        """
-        rule_id = '41d'
-        
-        salami_slices = kwargs['salami_slices']
-        metadata = kwargs['metadata']
-        curr_slice_idx = kwargs["slice_index"]
-        curr_slice: SalamiSlice = salami_slices[curr_slice_idx]
-        violations = []
-
-        return violations
 
 
